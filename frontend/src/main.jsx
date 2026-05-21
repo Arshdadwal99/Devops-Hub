@@ -1,11 +1,9 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { GoogleOAuthProvider } from "@react-oauth/google";
 import App from "./App";
 import "./index.css";
 
 console.log("main.jsx loading...");
-console.log("VITE_GOOGLE_CLIENT_ID:", import.meta.env.VITE_GOOGLE_CLIENT_ID);
 
 const root = document.getElementById("root");
 console.log("Root element:", root);
@@ -18,9 +16,7 @@ if (!root) {
   try {
     ReactDOM.createRoot(root).render(
       <React.StrictMode>
-        <GoogleOAuthProvider clientId={import.meta.env.VITE_GOOGLE_CLIENT_ID || "test-client-id-123"}>
-          <App />
-        </GoogleOAuthProvider>
+        <App />
       </React.StrictMode>
     );
     console.log("React app rendered successfully");

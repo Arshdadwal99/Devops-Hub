@@ -15,12 +15,21 @@ import {
 import {
   deployRelease,
   getDashboard,
+  getDockerContainers,
+  deleteAlert,
+  resolveAlert,
   restartServices,
   rollbackRelease,
   logout,
 } from "../lib/api";
 import { useAuth } from "../lib/AuthContext";
+import { subscribeToMetrics, subscribeToAlerts, subscribeToLogs, disconnectSocket } from "../lib/socket";
 import LogAnalysisForm from "../components/LogAnalysisForm";
+import JenkinsBuildStatus from "../components/JenkinsBuildStatus";
+import JenkinsBuildHistory from "../components/JenkinsBuildHistory";
+import JenkinsTriggerBuild from "../components/JenkinsTriggerBuild";
+import JenkinsStatistics from "../components/JenkinsStatistics";
+import GitHubAutoDeploy from "../components/GitHubAutoDeploy";
 
 const stats = [
   { key: "cpu", label: "CPU Usage", suffix: "%" },
@@ -57,14 +66,49 @@ function StatusPill({ value }) {
   );
 }
 
+function ContainerStatusPill({ value }) {
+  const normalized = String(value || "unknown").toLowerCase();
+  const tone =
+    normalized === "running"
+      ? "bg-emerald-400/15 text-emerald-200 border-emerald-300/20"
+      : normalized === "exited" || normalized === "stopped"
+        ? "bg-red-400/15 text-red-200 border-red-300/20"
+        : "bg-sky-400/15 text-sky-200 border-sky-300/20";
+
+  return (
+    <span className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] ${tone}`}>
+      {normalized}
+    </span>
+  );
+}
+
+function getContainerName(container) {
+  return container.Names || container.Name || container.containerName || "Unnamed container";
+}
+
+function getContainerId(container) {
+  return container.ID || container.Id || container.containerId || "";
+}
+
+function getContainerPorts(container) {
+  return container.Ports || container.ports || "No exposed ports";
+}
+
 function Dashboard() {
   const [dashboard, setDashboard] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [sectionErrors, setSectionErrors] = useState({});
   const [menuOpen, setMenuOpen] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showSupport, setShowSupport] = useState(false);
+  const [showContainers, setShowContainers] = useState(false);
+  const [containers, setContainers] = useState([]);
+  const [containersLoading, setContainersLoading] = useState(false);
+  const [containersError, setContainersError] = useState("");
+  const [alertActionId, setAlertActionId] = useState(null);
   const [isPending, startTransition] = useTransition();
   const menuRef = useRef(null);
   const navigate = useNavigate();
@@ -79,20 +123,64 @@ function Dashboard() {
         if (active) {
           setDashboard(data);
           setError("");
+          setSectionErrors({});
           setLastUpdated(new Date());
+          setLoading(false);
         }
       } catch (loadError) {
         if (active) {
-          setError(loadError.message);
+          const errorMsg = loadError.message || "Failed to load dashboard";
+          setError(errorMsg);
+          setLoading(false);
+          console.error("Dashboard load error:", loadError);
         }
       }
     }
 
     loadDashboard();
     const interval = setInterval(loadDashboard, 10000);
+
+    // Subscribe to real-time updates
+    const unsubscribeMetrics = subscribeToMetrics((metricsData) => {
+      if (active) {
+        setDashboard(prev => ({
+          ...prev,
+          metrics: {
+            ...prev?.metrics,
+            ...metricsData,
+          },
+        }));
+      }
+    });
+
+    const unsubscribeAlerts = subscribeToAlerts((alertsData) => {
+      if (active) {
+        setDashboard(prev => ({
+          ...prev,
+          alerts: alertsData,
+        }));
+      }
+    });
+
+    const unsubscribeLogs = subscribeToLogs((logsData) => {
+      if (active) {
+        setDashboard(prev => ({
+          ...prev,
+          logs: {
+            ...prev?.logs,
+            ...logsData,
+          },
+        }));
+      }
+    });
+
     return () => {
       active = false;
       clearInterval(interval);
+      unsubscribeMetrics?.();
+      unsubscribeAlerts?.();
+      unsubscribeLogs?.();
+      disconnectSocket();
     };
   }, []);
 
@@ -142,12 +230,99 @@ function Dashboard() {
     navigate("/login");
   };
 
-  if (!dashboard) {
+  const openContainers = async () => {
+    setShowContainers(true);
+    setContainersLoading(true);
+    setContainersError("");
+
+    try {
+      const data = await getDockerContainers();
+      setContainers(data.containers || []);
+    } catch (containerError) {
+      setContainersError(containerError.message || "Failed to load containers");
+      setContainers([]);
+    } finally {
+      setContainersLoading(false);
+    }
+  };
+
+  const removeAlertFromFeed = (alertId) => {
+    setDashboard((current) => ({
+      ...current,
+      alerts: (current?.alerts || []).filter((alert) => alert.id !== alertId),
+    }));
+  };
+
+  const handleResolveAlert = async (alertId) => {
+    if (!alertId) return;
+    setAlertActionId(alertId);
+
+    try {
+      const result = await resolveAlert(alertId);
+      if (result?.success === false) {
+        throw new Error(result.error || "Failed to dismiss alert");
+      }
+      removeAlertFromFeed(alertId);
+    } catch (alertError) {
+      setError(alertError.message || "Failed to dismiss alert");
+    } finally {
+      setAlertActionId(null);
+    }
+  };
+
+  const handleDeleteAlert = async (alertId) => {
+    if (!alertId) return;
+    setAlertActionId(alertId);
+
+    try {
+      const result = await deleteAlert(alertId);
+      if (result?.success === false) {
+        throw new Error(result.error || "Failed to delete alert");
+      }
+      removeAlertFromFeed(alertId);
+    } catch (alertError) {
+      setError(alertError.message || "Failed to delete alert");
+    } finally {
+      setAlertActionId(null);
+    }
+  };
+
+  if (loading && !dashboard) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
-        <div className="glass-panel rounded-3xl px-8 py-6 text-sm text-slate-200">
-          Connecting to control center...
-        </div>
+      <div className="flex min-h-screen items-center justify-center bg-slate-950">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="text-center"
+        >
+          <div className="mb-4 flex justify-center">
+            <div className="h-12 w-12 rounded-full border-4 border-slate-700 border-t-aurora animate-spin" />
+          </div>
+          <p className="text-lg font-semibold text-slate-300">Connecting to control center...</p>
+          <p className="mt-2 text-sm text-slate-400">Initializing real-time monitoring</p>
+        </motion.div>
+      </div>
+    );
+  }
+
+  if (error && !dashboard) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-950 p-4">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="max-w-md rounded-3xl border border-red-500/30 bg-red-500/10 p-6 backdrop-blur-xl"
+        >
+          <div className="mb-4 text-4xl">⚠️</div>
+          <h2 className="text-2xl font-bold text-red-200">Connection Error</h2>
+          <p className="mt-3 text-sm text-red-100/80 whitespace-pre-wrap">{error}</p>
+          <button
+            onClick={() => window.location.reload()}
+            className="mt-6 w-full rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700"
+          >
+            Try Again
+          </button>
+        </motion.div>
       </div>
     );
   }
@@ -273,7 +448,7 @@ function Dashboard() {
           <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div className="space-y-4">
               <p className="text-sm uppercase tracking-[0.4em] text-aurora">
-                PulseOps Control Center
+                Devops hub
               </p>
               <div>
                 <h1 className="font-display text-4xl font-bold tracking-tight sm:text-5xl">
@@ -312,24 +487,37 @@ function Dashboard() {
           </div>
 
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            {stats.map((item, index) => (
-              <motion.article
+            {stats.map((item, index) => {
+              const isContainersCard = item.key === "activeContainers";
+              const StatCard = isContainersCard ? motion.button : motion.article;
+
+              return (
+              <StatCard
                 key={item.key}
+                type={isContainersCard ? "button" : undefined}
+                onClick={isContainersCard ? openContainers : undefined}
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: index * 0.08 }}
-                className="rounded-3xl border border-white/10 bg-slate-950/40 p-5"
+                className={`rounded-3xl border border-white/10 bg-slate-950/40 p-5 text-left ${
+                  isContainersCard
+                    ? "cursor-pointer transition hover:border-aurora/40 hover:bg-slate-900/70 focus:outline-none focus:ring-2 focus:ring-aurora/60"
+                    : ""
+                }`}
               >
                 <p className="text-sm text-slate-400">{item.label}</p>
                 <div className="mt-4 flex items-end justify-between">
                   <p className="font-display text-4xl font-bold">
-                    {dashboard.metrics[item.key]}
+                    {dashboard?.metrics?.[item.key] !== undefined 
+                      ? dashboard.metrics[item.key] 
+                      : '-'}
                     <span className="text-lg text-slate-400">{item.suffix}</span>
                   </p>
                   <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-signal/30 to-aurora/20" />
                 </div>
-              </motion.article>
-            ))}
+              </StatCard>
+              );
+            })}
           </div>
         </div>
       </motion.section>
@@ -347,30 +535,30 @@ function Dashboard() {
                 Pipeline Status
               </p>
               <h2 className="mt-2 font-display text-2xl font-bold">
-                {dashboard.pipeline.workflow}
+                {dashboard?.pipeline?.workflow || 'Loading...'}
               </h2>
             </div>
-            <StatusPill value={dashboard.pipeline.buildStatus} />
+            <StatusPill value={dashboard?.pipeline?.buildStatus || 'unknown'} />
           </div>
 
           <div className="mt-6 grid gap-4 md:grid-cols-2">
             <div className="rounded-3xl border border-white/10 bg-slate-950/35 p-5">
               <p className="text-sm text-slate-400">Deployment</p>
               <div className="mt-3 flex items-center gap-3">
-                <StatusPill value={dashboard.pipeline.deploymentStatus} />
+                <StatusPill value={dashboard?.pipeline?.deploymentStatus || 'unknown'} />
                 <span className="text-sm text-slate-300">
-                  {dashboard.pipeline.environment}
+                  {dashboard?.pipeline?.environment || 'N/A'}
                 </span>
               </div>
               <div className="mt-6">
                 <div className="mb-2 flex items-center justify-between text-sm text-slate-400">
                   <span>Progress</span>
-                  <span>{dashboard.pipeline.progress}%</span>
+                  <span>{dashboard?.pipeline?.progress ?? 0}%</span>
                 </div>
                 <div className="h-3 rounded-full bg-slate-900">
                   <div
-                    className="h-full rounded-full bg-gradient-to-r from-aurora via-signal to-glow"
-                    style={{ width: `${dashboard.pipeline.progress}%` }}
+                    className="h-full rounded-full bg-gradient-to-r from-aurora via-signal to-glow transition-all duration-500"
+                    style={{ width: `${dashboard?.pipeline?.progress ?? 0}%` }}
                   />
                 </div>
               </div>
@@ -379,13 +567,15 @@ function Dashboard() {
             <div className="rounded-3xl border border-white/10 bg-slate-950/35 p-5">
               <p className="text-sm text-slate-400">Last Commit</p>
               <h3 className="mt-3 text-lg font-semibold text-slate-100">
-                {dashboard.pipeline.lastCommit.message}
+                {dashboard?.pipeline?.lastCommit?.message || 'No commits yet'}
               </h3>
               <p className="mt-4 text-sm text-slate-400">
-                {dashboard.pipeline.lastCommit.hash} by {dashboard.pipeline.lastCommit.author}
+                {dashboard?.pipeline?.lastCommit?.hash || 'N/A'} by {dashboard?.pipeline?.lastCommit?.author || 'Unknown'}
               </p>
               <p className="mt-1 text-xs uppercase tracking-[0.2em] text-slate-500">
-                {new Date(dashboard.pipeline.lastCommit.timestamp).toLocaleString()}
+                {dashboard?.pipeline?.lastCommit?.timestamp 
+                  ? new Date(dashboard.pipeline.lastCommit.timestamp).toLocaleString()
+                  : 'N/A'}
               </p>
             </div>
           </div>
@@ -402,38 +592,44 @@ function Dashboard() {
                 Auto-refresh 10s
               </p>
             </div>
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={dashboard.metrics.history}>
-                <defs>
-                  <linearGradient id="cpuFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#59f6d2" stopOpacity={0.55} />
-                    <stop offset="100%" stopColor="#59f6d2" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="memFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#67a4ff" stopOpacity={0.45} />
-                    <stop offset="100%" stopColor="#67a4ff" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
-                <XAxis dataKey="time" tick={{ fill: "#94a3b8", fontSize: 12 }} />
-                <YAxis tick={{ fill: "#94a3b8", fontSize: 12 }} />
-                <Tooltip />
-                <Area
-                  type="monotone"
-                  dataKey="cpu"
-                  stroke="#59f6d2"
-                  fill="url(#cpuFill)"
-                  strokeWidth={2}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="memory"
-                  stroke="#67a4ff"
-                  fill="url(#memFill)"
-                  strokeWidth={2}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
+            {dashboard?.metrics?.history && dashboard.metrics.history.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={dashboard.metrics.history}>
+                  <defs>
+                    <linearGradient id="cpuFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#59f6d2" stopOpacity={0.55} />
+                      <stop offset="100%" stopColor="#59f6d2" stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="memFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#67a4ff" stopOpacity={0.45} />
+                      <stop offset="100%" stopColor="#67a4ff" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
+                  <XAxis dataKey="time" tick={{ fill: "#94a3b8", fontSize: 12 }} />
+                  <YAxis tick={{ fill: "#94a3b8", fontSize: 12 }} />
+                  <Tooltip />
+                  <Area
+                    type="monotone"
+                    dataKey="cpu"
+                    stroke="#59f6d2"
+                    fill="url(#cpuFill)"
+                    strokeWidth={2}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="memory"
+                    stroke="#67a4ff"
+                    fill="url(#memFill)"
+                    strokeWidth={2}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex h-full items-center justify-center">
+                <p className="text-slate-400">Waiting for data...</p>
+              </div>
+            )}
           </div>
         </motion.article>
 
@@ -450,7 +646,7 @@ function Dashboard() {
                   Release Control
                 </p>
                 <h2 className="mt-2 font-display text-2xl font-bold">
-                  Version {dashboard.controlPanel.currentVersion}
+                  Version {dashboard?.controlPanel?.currentVersion || 'N/A'}
                 </h2>
               </div>
               <div className="rounded-2xl border border-white/10 px-4 py-2 text-xs uppercase tracking-[0.25em] text-slate-300">
@@ -460,17 +656,19 @@ function Dashboard() {
             <div className="mt-5 grid gap-4 sm:grid-cols-2">
               <div className="rounded-3xl border border-white/10 bg-slate-950/35 p-4">
                 <p className="text-sm text-slate-400">Previous</p>
-                <p className="mt-2 text-2xl font-semibold">{dashboard.controlPanel.previousVersion}</p>
+                <p className="mt-2 text-2xl font-semibold">{dashboard?.controlPanel?.previousVersion || 'N/A'}</p>
               </div>
               <div className="rounded-3xl border border-white/10 bg-slate-950/35 p-4">
                 <p className="text-sm text-slate-400">Last Deploy</p>
                 <p className="mt-2 text-base font-semibold">
-                  {new Date(dashboard.controlPanel.lastDeploymentAt).toLocaleString()}
+                  {dashboard?.controlPanel?.lastDeploymentAt 
+                    ? new Date(dashboard.controlPanel.lastDeploymentAt).toLocaleString()
+                    : 'Never'}
                 </p>
               </div>
             </div>
             <div className="mt-4 rounded-3xl border border-aurora/20 bg-aurora/8 p-4 text-sm text-slate-200">
-              {dashboard.controlPanel.nextRecommendation}
+              {dashboard?.controlPanel?.nextRecommendation || 'No recommendations at this time'}
             </div>
           </motion.article>
 
@@ -489,15 +687,21 @@ function Dashboard() {
               </h2>
             </div>
             <div className="mt-4 h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={dashboard.metrics.history}>
-                  <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
-                  <XAxis dataKey="time" tick={{ fill: "#94a3b8", fontSize: 12 }} />
-                  <YAxis tick={{ fill: "#94a3b8", fontSize: 12 }} />
-                  <Tooltip />
-                  <Bar dataKey="traffic" fill="#9c7dff" radius={[10, 10, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+              {dashboard?.metrics?.history && dashboard.metrics.history.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={dashboard.metrics.history}>
+                    <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" vertical={false} />
+                    <XAxis dataKey="time" tick={{ fill: "#94a3b8", fontSize: 12 }} />
+                    <YAxis tick={{ fill: "#94a3b8", fontSize: 12 }} />
+                    <Tooltip />
+                    <Bar dataKey="traffic" fill="#9c7dff" radius={[10, 10, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex h-full items-center justify-center">
+                  <p className="text-slate-400">Waiting for traffic data...</p>
+                </div>
+              )}
             </div>
           </motion.article>
         </div>
@@ -523,21 +727,33 @@ function Dashboard() {
             <div className="rounded-3xl border border-white/10 bg-slate-950/40 p-4">
               <p className="mb-3 text-sm font-semibold text-aurora">Deployment Logs</p>
               <div className="space-y-3 font-mono text-xs text-slate-300">
-                {dashboard.logs.deployment.map((entry) => (
-                  <div key={entry} className="rounded-2xl border border-white/5 bg-white/5 p-3">
-                    {entry}
+                {dashboard?.logs?.deployment && dashboard.logs.deployment.length > 0 ? (
+                  dashboard.logs.deployment.map((entry, idx) => (
+                    <div key={idx} className="rounded-2xl border border-white/5 bg-white/5 p-3">
+                      {entry}
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-2xl border border-white/5 bg-white/5 p-3 text-slate-500">
+                    No deployment logs yet
                   </div>
-                ))}
+                )}
               </div>
             </div>
             <div className="rounded-3xl border border-white/10 bg-slate-950/40 p-4">
               <p className="mb-3 text-sm font-semibold text-red-200">Error Logs</p>
               <div className="space-y-3 font-mono text-xs text-slate-300">
-                {dashboard.logs.errorLogs.map((entry) => (
-                  <div key={entry} className="rounded-2xl border border-red-300/10 bg-red-500/5 p-3">
-                    {entry}
+                {dashboard?.logs?.errorLogs && dashboard.logs.errorLogs.length > 0 ? (
+                  dashboard.logs.errorLogs.map((entry, idx) => (
+                    <div key={idx} className="rounded-2xl border border-red-300/10 bg-red-500/5 p-3">
+                      {entry}
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-2xl border border-red-300/10 bg-red-500/5 p-3 text-slate-500">
+                    No error logs
                   </div>
-                ))}
+                )}
               </div>
             </div>
           </div>
@@ -559,27 +775,58 @@ function Dashboard() {
           </div>
 
           <div className="mt-5 space-y-4">
-            {dashboard.alerts.map((alert) => (
-              <div
-                key={`${alert.message}-${alert.createdAt}`}
-                className="rounded-3xl border border-white/10 bg-slate-950/40 p-4"
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <StatusPill value={alert.severity} />
-                  <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                    {new Date(alert.createdAt).toLocaleTimeString()}
-                  </span>
+            {dashboard?.alerts && dashboard.alerts.length > 0 ? (
+              dashboard.alerts.map((alert, idx) => (
+                <div
+                  key={alert.id || `${alert.message}-${alert.timestamp}-${idx}`}
+                  className="rounded-3xl border border-white/10 bg-slate-950/40 p-4"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <StatusPill value={alert.severity || 'info'} />
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                        {alert.timestamp ? new Date(alert.timestamp).toLocaleTimeString() : 'Unknown'}
+                      </span>
+                      {alert.id && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => handleResolveAlert(alert.id)}
+                            disabled={alertActionId === alert.id}
+                            className="rounded-lg border border-emerald-300/20 px-2.5 py-1 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            Dismiss
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteAlert(alert.id)}
+                            disabled={alertActionId === alert.id}
+                            className="rounded-lg border border-red-300/20 px-2.5 py-1 text-xs font-semibold text-red-200 transition hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            Delete
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <p className="mt-3 text-sm text-slate-200">{alert.message || 'No message'}</p>
                 </div>
-                <p className="mt-3 text-sm text-slate-200">{alert.message}</p>
+              ))
+            ) : (
+              <div className="rounded-3xl border border-emerald-300/20 bg-emerald-500/10 p-4">
+                <div className="flex items-center gap-3">
+                  <span className="text-xl">✓</span>
+                  <p className="text-sm text-emerald-200">All systems operational. No active alerts.</p>
+                </div>
               </div>
-            ))}
+            )}
           </div>
 
-          {error ? (
+          {error && (
             <div className="mt-5 rounded-3xl border border-red-400/20 bg-red-500/10 p-4 text-sm text-red-100">
-              {error}
+              ⚠️ {error}
             </div>
-          ) : null}
+          )}
         </motion.article>
       </section>
 
@@ -594,7 +841,155 @@ function Dashboard() {
         </motion.div>
       </section>
 
+      {/* Jenkins CI/CD Section */}
+      <section className="mt-6 space-y-6">
+        <motion.div
+          initial={{ opacity: 0, y: 18 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.45 }}
+        >
+          <div className="glass-panel rounded-[28px] p-6">
+            <div className="mb-6">
+              <p className="text-sm uppercase tracking-[0.3em] text-slate-400">
+                CI/CD Pipeline
+              </p>
+              <h2 className="mt-2 font-display text-2xl font-bold">
+                Jenkins Integration
+              </h2>
+            </div>
+            <JenkinsBuildStatus />
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 18 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.5 }}
+        >
+          <div className="glass-panel rounded-[28px] p-6">
+            <GitHubAutoDeploy onDeployed={() => setLastUpdated(new Date())} />
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 18 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.55 }}
+        >
+          <div className="glass-panel rounded-[28px] p-6">
+            <JenkinsTriggerBuild />
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 18 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.6 }}
+        >
+          <div className="glass-panel rounded-[28px] p-6">
+            <JenkinsBuildHistory />
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 18 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.65 }}
+        >
+          <div className="glass-panel rounded-[28px] p-6">
+            <JenkinsStatistics />
+          </div>
+        </motion.div>
+      </section>
+
       {/* Settings Modal */}
+      {showContainers && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm"
+          onClick={() => setShowContainers(false)}
+        >
+          <motion.div
+            initial={{ scale: 0.95, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="max-h-[85vh] w-full max-w-4xl overflow-hidden rounded-[28px] border border-white/10 bg-slate-950 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-white/10 p-6">
+              <div>
+                <p className="text-sm uppercase tracking-[0.3em] text-slate-400">
+                  Docker
+                </p>
+                <h2 className="mt-2 font-display text-2xl font-bold">
+                  Containers
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowContainers(false)}
+                className="rounded-xl border border-white/10 px-3 py-2 text-sm font-semibold text-slate-200 transition hover:bg-white/10"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="max-h-[65vh] overflow-auto p-6">
+              {containersLoading ? (
+                <p className="text-sm text-slate-300">Loading containers...</p>
+              ) : containersError ? (
+                <div className="rounded-2xl border border-red-400/20 bg-red-500/10 p-4 text-sm text-red-100">
+                  {containersError}
+                </div>
+              ) : containers.length > 0 ? (
+                <div className="grid gap-4 md:grid-cols-2">
+                  {containers.map((container) => {
+                    const id = getContainerId(container);
+
+                    return (
+                      <article
+                        key={id || getContainerName(container)}
+                        className="rounded-2xl border border-white/10 bg-slate-900/60 p-4"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <h3 className="truncate text-base font-semibold text-slate-100">
+                              {getContainerName(container)}
+                            </h3>
+                            <p className="mt-1 truncate text-xs text-slate-500">
+                              {id ? id.slice(0, 12) : "No container ID"}
+                            </p>
+                          </div>
+                          <ContainerStatusPill value={container.State || container.Status} />
+                        </div>
+                        <div className="mt-4 space-y-2 text-sm text-slate-300">
+                          <p className="truncate">
+                            <span className="text-slate-500">Image:</span>{" "}
+                            {container.Image || "Unknown"}
+                          </p>
+                          <p className="truncate">
+                            <span className="text-slate-500">Ports:</span>{" "}
+                            {getContainerPorts(container)}
+                          </p>
+                          <p className="text-slate-400">
+                            {container.Status || "Status unavailable"}
+                          </p>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-6 text-sm text-slate-300">
+                  No Docker containers found.
+                </div>
+              )}
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+
       {showSettings && (
         <motion.div
           initial={{ opacity: 0 }}
@@ -678,7 +1073,7 @@ function Dashboard() {
             className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-950/95 p-6 shadow-2xl"
           >
             <h2 className="text-2xl font-bold text-slate-100">Help & Documentation</h2>
-            <p className="mt-2 text-sm text-slate-400">Find answers and learn how to use PulseOps</p>
+            <p className="mt-2 text-sm text-slate-400">Find answers and learn how to use Devops hub</p>
 
             <div className="mt-6 space-y-3">
               <a
@@ -774,7 +1169,7 @@ function Dashboard() {
 
               <div className="rounded-xl bg-slate-900/50 p-4">
                 <p className="text-sm font-medium text-slate-100">🐛 Report a Bug</p>
-                <p className="mt-1 text-xs text-slate-400">Help us improve PulseOps</p>
+                <p className="mt-1 text-xs text-slate-400">Help us improve Devops hub</p>
                 <button
                   onClick={() => setShowSupport(false)}
                   className="mt-3 w-full rounded-lg bg-slate-800 px-3 py-2 text-xs font-medium text-slate-300 transition hover:bg-slate-700"

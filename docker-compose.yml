@@ -10,13 +10,12 @@ services:
   backend:
     build:
       context: ./backend
+    env_file:
+      - ./backend/.env
     restart: unless-stopped
     environment:
       PORT: 5000
-      MONGODB_URI: mongodb://mongo:27017/devops-dashboard
       CLIENT_ORIGIN: http://localhost:8080
-    depends_on:
-      - mongo
     ports:
       - "5000:5000"
 

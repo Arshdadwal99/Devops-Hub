@@ -6,10 +6,109 @@ import { LogAnalysis } from "../models/LogAnalysis.js";
 
 const router = express.Router();
 
+function toAnalysisContract(analysis, metrics = {}) {
+  const suggestedFixes = analysis.suggested_fixes || analysis.suggestedFixes || [];
+  const errorsDetected = analysis.errors_detected || analysis.errors || metrics.errorSamples || [];
+  const warningsDetected = analysis.warnings_detected || analysis.warnings || metrics.warningSamples || [];
+
+  return {
+    errors_detected: Array.isArray(errorsDetected) ? errorsDetected : [String(errorsDetected)],
+    warnings_detected: Array.isArray(warningsDetected) ? warningsDetected : [String(warningsDetected)],
+    deployment_issues: analysis.deployment_issues || analysis.root_cause || "No deployment-specific issue detected",
+    suggested_fixes: suggestedFixes,
+    failure_probability: analysis.failure_probability,
+    severity: analysis.severity,
+    affected_stage: analysis.affected_stage,
+    confidence: analysis.confidence,
+    explanation: analysis.explanation,
+  };
+}
+
 /**
- * POST /api/analyze-logs
+ * POST /api/analyze (root endpoint)
  * Analyze CI/CD logs for failure prediction
  * Protected route - requires authentication
+ */
+router.post("/", verifyToken, async (req, res) => {
+  try {
+    const { logs, pipelineId = "default" } = req.body;
+
+    // Validate input
+    if (!logs || typeof logs !== "string" || logs.trim().length === 0) {
+      return res.status(400).json({
+        error: "Invalid request",
+        message: "logs field is required and must be a non-empty string",
+      });
+    }
+
+    if (logs.length > 1000000) {
+      // 1MB limit
+      return res.status(413).json({
+        error: "Request entity too large",
+        message: "Log file exceeds 1MB limit",
+      });
+    }
+
+    console.log("📊 [Analyze] Analyzing logs for pipeline:", pipelineId);
+
+    // Preprocess logs
+    const preprocessed = preprocessLogs(logs);
+    const metrics = extractMetrics(logs); // Pass original logs, not preprocessed object
+    
+    console.log("📈 Extracted metrics:", metrics);
+
+    // Try AI analysis
+    let analysis;
+    try {
+      analysis = await analyzeLogsWithAI(logs, metrics);
+    } catch (aiError) {
+      console.warn("⚠️  AI analysis failed, using fallback");
+      analysis = fallbackAnalysis(logs, metrics);
+    }
+
+    // Ensure failure_probability is a valid number
+    if (!analysis.failure_probability || isNaN(analysis.failure_probability)) {
+      analysis.failure_probability = 50;
+    }
+
+    // Save analysis to database
+    try {
+      const result = new LogAnalysis({
+        pipelineId,
+        userId: req.user.userId,
+        originalLogs: logs.substring(0, 50000), // Store first 50KB
+        logMetrics: metrics,
+        analysis,
+        aiModel: "fallback",
+        timestamp: new Date(),
+      });
+
+      await result.save();
+      console.log("✅ Analysis saved successfully");
+    } catch (dbError) {
+      console.warn("⚠️  Failed to save to database:", dbError.message);
+      // Still return analysis even if DB save fails
+    }
+
+    res.json({
+      success: true,
+      analysis,
+      result: toAnalysisContract(analysis, metrics),
+      metrics,
+      message: "Log analysis completed successfully",
+    });
+  } catch (error) {
+    console.error("❌ [Analyze] Error:", error.message);
+    res.status(500).json({
+      error: "Analysis failed",
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * POST /api/analyze/analyze-logs
+ * Alternative endpoint for backwards compatibility
  */
 router.post("/analyze-logs", verifyToken, async (req, res) => {
   try {
@@ -90,6 +189,7 @@ router.post("/analyze-logs", verifyToken, async (req, res) => {
         affected_stage: analysis.affected_stage,
         confidence: analysis.confidence,
       },
+      result: toAnalysisContract(analysis, analysis.metrics),
       metadata: {
         processingTime,
         usedFallback,

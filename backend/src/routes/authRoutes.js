@@ -4,6 +4,7 @@ import {
   loginService,
   googleAuthService,
   getUserService,
+  firebaseAuthService,
 } from "../services/authService.js";
 import { verifyToken } from "../middleware/authMiddleware.js";
 
@@ -12,15 +13,21 @@ const router = express.Router();
 // Signup route
 router.post("/signup", async (req, res, next) => {
   try {
+    console.log("📝 [Auth/Signup] Request received");
     const { email, password, name } = req.body;
+    console.log("📝 [Auth/Signup] Data:", { email, name, passwordLength: password?.length });
 
     if (!email || !password || !name) {
+      console.warn("⚠️  [Auth/Signup] Missing required fields");
       return res.status(400).json({ message: "Missing required fields" });
     }
 
+    console.log("🔄 [Auth/Signup] Calling signup service...");
     const result = await signupService(email, password, name);
+    console.log("✅ [Auth/Signup] Service returned successfully");
     res.status(201).json(result);
   } catch (error) {
+    console.error("❌ [Auth/Signup] Error:", error.message);
     next(error);
   }
 });
@@ -73,6 +80,27 @@ router.get("/me", verifyToken, async (req, res, next) => {
     const user = await getUserService(req.user.userId);
     res.json(user);
   } catch (error) {
+    next(error);
+  }
+});
+
+// Firebase authentication (signup/login)
+router.post("/firebase", async (req, res, next) => {
+  try {
+    const { firebaseToken, name } = req.body;
+
+    if (!firebaseToken) {
+      return res.status(400).json({ message: "Firebase token is required" });
+    }
+
+    console.log("🔐 [Firebase Auth] Request received");
+    
+    const result = await firebaseAuthService(firebaseToken, "firebase", { name });
+    console.log("✅ [Firebase Auth] Authentication successful");
+    
+    res.json(result);
+  } catch (error) {
+    console.error("❌ [Firebase Auth] Error:", error.message);
     next(error);
   }
 });

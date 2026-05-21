@@ -22,13 +22,17 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    firebaseUid: {
+      type: String,
+      default: null,
+    },
     profilePicture: {
       type: String,
       default: null,
     },
     authProvider: {
       type: String,
-      enum: ["local", "google"],
+      enum: ["local", "google", "firebase"],
       required: true,
     },
     createdAt: {

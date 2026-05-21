@@ -1,0 +1,267 @@
+name: DevOps Hub CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/devops-hub
+
+jobs:
+  # Job 1: Build and Test Backend
+  build-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Backend Dependencies
+        run: |
+          cd backend
+          npm ci
+
+      - name: Run Backend Linter
+        run: |
+          cd backend
+          npm run lint --if-present
+
+      - name: Build Backend
+        run: |
+          cd backend
+          npm run build --if-present
+
+      - name: Upload Backend Artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: backend-build
+          path: backend/dist
+          if-no-files-found: ignore
+
+  # Job 2: Build and Test Frontend
+  build-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Frontend Dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Run Frontend Linter
+        run: |
+          cd frontend
+          npm run lint --if-present
+
+      - name: Build Frontend
+        run: |
+          cd frontend
+          npm run build
+
+      - name: Upload Frontend Artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: frontend-build
+          path: frontend/dist
+
+  # Job 3: Build Docker Image
+  build-docker:
+    needs: [ build-backend, build-frontend ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Download Backend Artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: backend-build
+          path: backend/dist
+
+      - name: Download Frontend Artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: frontend-build
+          path: frontend/dist
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Metadata
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Job 4: Deploy to Production (only on main branch)
+  deploy:
+    needs: [ build-docker ]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Deploy to EC2
+        run: |
+          # SSH into EC2 and deploy
+          ssh -i ${{ runner.temp }}/key.pem \
+              -o StrictHostKeyChecking=no \
+              ubuntu@${{ secrets.EC2_HOST }} \
+              'cd /app && docker-compose pull && docker-compose up -d'
+
+      - name: Run Health Check
+        run: |
+          # Wait for deployment and verify
+          sleep 10
+          curl -f http://${{ secrets.EC2_HOST }}:5000/api/health || exit 1
+
+      - name: Notify Deployment Status
+        if: always()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const status = context.job.status === 'success' ? '✅ Success' : '❌ Failed';
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `Deployment ${status}`
+            });
+
+  # Job 5: Run Tests
+  test:
+    runs-on: ubuntu-latest
+    services:
+      mongodb:
+        image: mongo:latest
+        options: >-
+          --health-cmd mongosh
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 27017:27017
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: |
+          npm install
+          cd backend && npm install && cd ..
+          cd frontend && npm install && cd ..
+
+      - name: Run Backend Tests
+        run: |
+          cd backend
+          npm run test --if-present
+        env:
+          MONGODB_URI: mongodb://localhost:27017/devops-dashboard-test
+
+      - name: Run Frontend Tests
+        run: |
+          cd frontend
+          npm run test --if-present
+
+      - name: Upload Test Results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-results
+          path: coverage/
+
+  # Job 6: Security Scanning
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Run Trivy Vulnerability Scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy Results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # Job 7: Notify Results
+  notify:
+    needs: [ build-docker, test, security ]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Post Results to Slack
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: |
+            CI/CD Pipeline: ${{ job.status }}
+            Build: ${{ needs.build-docker.result }}
+            Tests: ${{ needs.test.result }}
+            Security: ${{ needs.security.result }}
+            Commit: ${{ github.sha }}
+            Branch: ${{ github.ref }}
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+          fields: repo,message,commit,author,action,eventName,ref,workflow

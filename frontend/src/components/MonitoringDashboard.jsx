@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { api } from "../lib/api";
 
@@ -12,7 +12,7 @@ export default function MonitoringDashboard() {
   const [lastUpdated, setLastUpdated] = useState(new Date());
 
   // Fetch all monitoring data
-  const fetchMonitoringData = async () => {
+  const fetchMonitoringData = useCallback(async () => {
     try {
       setError(null);
 
@@ -65,14 +65,17 @@ export default function MonitoringDashboard() {
       setError(err.message);
       setLoading(false);
     }
-  };
+  }, []);
 
   // Auto-refresh every 10 seconds
   useEffect(() => {
-    fetchMonitoringData();
+    const initialLoad = setTimeout(fetchMonitoringData, 0);
     const interval = setInterval(fetchMonitoringData, 10000);
-    return () => clearInterval(interval);
-  }, []);
+    return () => {
+      clearTimeout(initialLoad);
+      clearInterval(interval);
+    };
+  }, [fetchMonitoringData]);
 
   if (loading && !pipelineStatus && !metrics && !logs.length) {
     return (

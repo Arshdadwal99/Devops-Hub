@@ -1,0 +1,26 @@
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@400;500;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply min-h-screen bg-shell bg-grid bg-[size:42px_42px] text-slate-100 font-body;
+  background-image:
+    radial-gradient(circle at top left, rgba(89, 246, 210, 0.12), transparent 26%),
+    radial-gradient(circle at top right, rgba(156, 125, 255, 0.12), transparent 30%),
+    linear-gradient(rgba(103, 164, 255, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(103, 164, 255, 0.08) 1px, transparent 1px);
+}
+
+#root {
+  @apply min-h-screen;
+}
+
+.glass-panel {
+  @apply border border-white/10 bg-white/5 backdrop-blur-xl shadow-panel;
+}

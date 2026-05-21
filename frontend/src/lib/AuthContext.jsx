@@ -12,21 +12,30 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     const checkAuth = async () => {
       const token = localStorage.getItem("authToken");
+      
+      // Only check auth if we have a token
       if (token) {
         try {
           const userData = await getCurrentUser();
           setUser(userData);
           setIsAuthenticated(true);
         } catch (error) {
-          console.error("Failed to fetch user:", error);
+          // Silently clear auth if user fetch fails - don't show error on login page
+          console.warn("Auth check failed:", error.message);
           localStorage.removeItem("authToken");
           setIsAuthenticated(false);
         }
+      } else {
+        // No token, user is not authenticated
+        setIsAuthenticated(false);
       }
+      
       setLoading(false);
     };
 
-    checkAuth();
+    // Delay the auth check slightly to ensure everything is ready
+    const timer = setTimeout(checkAuth, 100);
+    return () => clearTimeout(timer);
   }, []);
 
   const login = (userData, token) => {
