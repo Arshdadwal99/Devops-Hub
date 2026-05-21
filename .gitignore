@@ -12,3 +12,4 @@ npm-debug.log*
 backend/logs
 frontend/.vite
 mongodb.zip
+WEBHOOK_REAL_WORLD_EXAMPLE.md
