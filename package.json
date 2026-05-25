@@ -16,6 +16,7 @@
     "lint": "npm run lint:backend && npm run lint:frontend",
     "lint:frontend": "npm --workspace frontend run lint",
     "lint:backend": "npm --workspace backend run lint",
-    "seed": "npm --workspace backend run seed"
+    "seed": "npm --workspace backend run seed",
+    "start": "node backend/src/server.js"
   }
 }
