@@ -1,12 +1,31 @@
 import { Alert } from "../models/Alert.js";
 import { Metrics } from "../models/Metrics.js";
 import { emitNewAlert, emitAlertResolved } from "./socketEventsService.js";
+import { isDbConnected } from "../db.js";
 
 /**
  * Create or update alert
  */
 export const createAlert = async (userId, alertData) => {
   try {
+    if (!isDbConnected()) {
+      console.warn("⚠️ [Alert] Database not connected - alert will be emitted but not persisted");
+      // Still emit the alert via Socket.io
+      emitNewAlert({
+        type: alertData.type,
+        severity: alertData.severity,
+        title: alertData.title,
+        message: alertData.message,
+        resourceType: alertData.resourceType,
+        resourceId: alertData.resourceId,
+      });
+      return {
+        success: true,
+        alert: alertData,
+        persisted: false,
+      };
+    }
+
     const alert = await Alert.create({
       userId,
       ...alertData,
@@ -29,12 +48,20 @@ export const createAlert = async (userId, alertData) => {
     return {
       success: true,
       alert: alert.toObject(),
+      persisted: true,
     };
   } catch (error) {
-    console.error("❌ [Alert] Error creating alert:", error.message);
+    if (error.message.includes("buffering timed out")) {
+      console.error("❌ [Alert] Database buffer timeout - connection issue with MongoDB");
+    } else if (error.message.includes("connect")) {
+      console.error("❌ [Alert] Database connection error - cannot save alert");
+    } else {
+      console.error("❌ [Alert] Error creating alert:", error.message);
+    }
     return {
       success: false,
       error: error.message,
+      persisted: false,
     };
   }
 };
@@ -44,6 +71,16 @@ export const createAlert = async (userId, alertData) => {
  */
 export const getAlerts = async (userId, filters = {}) => {
   try {
+    if (!isDbConnected()) {
+      console.warn("⚠️ [Alert] Database not connected - cannot fetch alerts");
+      return {
+        success: false,
+        error: "Database not connected",
+        alerts: [],
+        total: 0,
+      };
+    }
+
     const query = { userId };
     const {
       severity = null,
@@ -72,7 +109,11 @@ export const getAlerts = async (userId, filters = {}) => {
       count: alerts.length,
     };
   } catch (error) {
-    console.error("❌ [Alert] Error fetching alerts:", error.message);
+    if (error.message.includes("buffering timed out")) {
+      console.error("❌ [Alert] Database buffer timeout - connection issue");
+    } else {
+      console.error("❌ [Alert] Error fetching alerts:", error.message);
+    }
     return {
       success: false,
       error: error.message,
@@ -87,6 +128,14 @@ export const getAlerts = async (userId, filters = {}) => {
  */
 export const resolveAlert = async (alertId, resolvedBy = null, action = null) => {
   try {
+    if (!isDbConnected()) {
+      console.warn("⚠️ [Alert] Database not connected - cannot resolve alert");
+      return {
+        success: false,
+        error: "Database not connected",
+      };
+    }
+
     const alert = await Alert.findByIdAndUpdate(
       alertId,
       {
@@ -112,7 +161,11 @@ export const resolveAlert = async (alertId, resolvedBy = null, action = null) =>
       alert: alert.toObject(),
     };
   } catch (error) {
-    console.error("❌ [Alert] Error resolving alert:", error.message);
+    if (error.message.includes("buffering timed out")) {
+      console.error("❌ [Alert] Database buffer timeout - connection issue");
+    } else {
+      console.error("❌ [Alert] Error resolving alert:", error.message);
+    }
     return {
       success: false,
       error: error.message,

@@ -11,6 +11,8 @@ import http from "http";
 import { Server as SocketIOServer } from "socket.io";
 import { config } from "./config.js";
 import { connectDb, isDbConnected } from "./db.js";
+import { initializeDockerCheck } from "./services/dockerService.js";
+import { initializeJenkinsCheck } from "./services/jenkinsService.js";
 import dashboardRoutes from "./routes/dashboardRoutes.js";
 import metricsRoutes from "./routes/metricsRoutes.js";
 import deploymentRoutes from "./routes/deploymentRoutes.js";
@@ -296,20 +298,54 @@ const startMetricsCollection = async () => {
 
 async function startServer() {
   try {
+    console.log("🚀 [Server] Starting backend server...");
+    console.log(`📍 [Server] Environment: ${config.nodeEnv}`);
+    
     // Try to connect to MongoDB
+    console.log("🔄 [Server] Attempting MongoDB connection...");
     try {
-      await connectDb();
+      const connected = await connectDb();
+      if (connected) {
+        console.log("✅ [Server] MongoDB connection successful!");
+      } else {
+        console.warn("⚠️ [Server] MongoDB connection failed - using local fallback");
+      }
     } catch (dbError) {
-      console.warn("⚠️ Starting server without database connection...");
-      console.warn("Database will be available once MongoDB is running.");
+      console.warn("⚠️ [Server] MongoDB connection error:", dbError.message);
+      console.warn("⚠️ [Server] Starting server without database connection...");
+      console.warn("⚠️ [Server] Database will be available once MongoDB is running.");
+    }
+    // Check Docker daemon availability
+    console.log("🔄 [Server] Checking Docker daemon...");
+    try {
+      await initializeDockerCheck();
+    } catch (dockerError) {
+      console.warn("⚠️ [Server] Docker daemon check failed:", dockerError.message);
+      console.warn("⚠️ [Server] Docker monitoring will not be available");
     }
 
-    server.listen(config.port, () => {
-      console.log(`✅ Backend listening on port ${config.port}`);
-      console.log(`📍 API Base: http://localhost:${config.port}/api`);
-      console.log(`🔌 Socket.io: ws://localhost:${config.port}`);
+    // Check Jenkins server availability
+    console.log("🔄 [Server] Checking Jenkins server...");
+    try {
+      await initializeJenkinsCheck();
+    } catch (jenkinsError) {
+      console.warn("⚠️ [Server] Jenkins server check failed:", jenkinsError.message);
+      console.warn("⚠️ [Server] Deployment tracking will use mock data until Jenkins is available");
+    }
+
+    // Start server - bind to 0.0.0.0 for Docker/EC2 external access
+    const PORT = process.env.PORT || 5000;
+    server.listen(PORT, '0.0.0.0', () => {
+      console.log(`✅ Backend listening on port ${PORT}`);
+      console.log(`📍 API Base: http://0.0.0.0:${PORT}/api`);
+      console.log(`🌐 Accessible at: http://localhost:${PORT}/api (local)`);
+      console.log(`🚀 Docker/EC2: Accessible on all network interfaces on port ${PORT}`);
+      console.log(`🔌 Socket.io: ws://0.0.0.0:${PORT}`);
       if (!isDbConnected()) {
         console.log("⚠️  MongoDB is not connected. Some features will not work.");
+        console.log("    To restore: Check MONGO_URI and restart the server");
+      } else {
+        console.log("✅ [Server] All systems ready!");
       }
     });
 
@@ -345,6 +381,27 @@ async function startServer() {
     } catch (error) {
       console.warn("⚠️  Could not start Docker monitoring:", error.message);
     }
+
+    // Handle graceful shutdown on SIGTERM
+    process.on("SIGTERM", async () => {
+      console.log("⏹️  [Server] Received SIGTERM signal - graceful shutdown...");
+      server.close(() => {
+        console.log("✅ [Server] HTTP server closed");
+        process.exit(0);
+      });
+    });
+
+    // Handle uncaught exceptions
+    process.on("uncaughtException", (error) => {
+      console.error("❌ [Server] Uncaught exception:", error);
+      process.exit(1);
+    });
+
+    process.on("unhandledRejection", (reason) => {
+      console.error("❌ [Server] Unhandled rejection:", reason);
+      process.exit(1);
+    });
+
   } catch (error) {
     console.error("❌ Failed to start server:", error.message);
     process.exit(1);

@@ -1,12 +1,65 @@
-# Docker Monitoring System - Complete Implementation ✅
+# Docker Monitoring in Production Containers - COMPLETE ✅
 
-## Overview
+**Updated:** Production deployment with Docker socket mounting support
 
-Complete Docker monitoring and management system for DevOps Hub with real-time container tracking, deployment history, and WebSocket live updates.
+## Executive Summary
+
+**Problem:** Backend running in Docker containers couldn't execute Docker commands
+```
+❌ Error: docker: not found
+❌ Container stats unavailable
+❌ Docker monitoring disabled
+```
+
+**Solution:** Implemented Docker availability checks with graceful fallback
+```
+✅ Check if Docker daemon accessible
+✅ Return friendly errors when unavailable
+✅ App continues working regardless
+✅ All APIs return dockerAvailable status
+```
+
+**Deployment:** Mount Docker socket into container
+```bash
+docker run -v /var/run/docker.sock:/var/run/docker.sock ...
+```
 
 ---
 
-## Architecture
+## Phase 3: Docker Monitoring in Production Containers
+
+### Implementation Summary
+
+#### New Functions (dockerService.js)
+```javascript
+✅ isDockerAvailable()        - Check if daemon accessible (caches 10s)
+✅ initializeDockerCheck()    - Initialize on server startup
+✅ unavailableResponse()      - Graceful fallback responses by type
+```
+
+#### Enhanced Functions with Docker Checks
+```
+✅ getContainers()            - Get all containers
+✅ getContainerStats()        - Stats for single container
+✅ getAllContainerStats()     - Stats for all containers
+✅ getContainerLogs()         - Get container logs
+✅ getContainerHealth()       - Get health status
+✅ getDockerInfo()            - System information
+```
+
+#### Server Startup Integration (server.js)
+- Import `initializeDockerCheck` from dockerService
+- Call on server startup with detailed logging
+- Graceful error handling - doesn't block if Docker unavailable
+
+#### Docker Socket Requirements
+- Mount `/var/run/docker.sock` into container
+- Ensures container can communicate with host Docker daemon
+- Works with Docker, Docker Compose, Kubernetes, AWS ECS
+
+---
+
+## Deployment Quick Start
 
 ### Backend Components
 

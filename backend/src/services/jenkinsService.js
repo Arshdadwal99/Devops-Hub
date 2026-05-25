@@ -14,6 +14,152 @@ const JENKINS_TOKEN = process.env.JENKINS_TOKEN || "";
 const JENKINS_JOB_NAME = process.env.JENKINS_JOB_NAME || "devops-hub-deploy";
 const JENKINS_AUTO_CREATE_JOB = process.env.JENKINS_AUTO_CREATE_JOB !== "false";
 
+// Jenkins availability tracking
+let jenkinsAvailable = null;
+let jenkinsCheckTime = 0;
+const JENKINS_CHECK_INTERVAL = 30000; // 30 seconds
+const JENKINS_RETRY_CONFIG = {
+  maxRetries: 3,
+  retryDelays: [1000, 3000, 5000], // Exponential backoff: 1s, 3s, 5s
+  timeout: 10000, // 10 seconds
+};
+
+/**
+ * Jenkins Connection Validator - Check if Jenkins is reachable
+ */
+export async function isJenkinsAvailable() {
+  const now = Date.now();
+  
+  // Use cached result if recent (30 seconds)
+  if (jenkinsAvailable !== null && (now - jenkinsCheckTime) < JENKINS_CHECK_INTERVAL) {
+    return jenkinsAvailable;
+  }
+
+  try {
+    // Validate configuration
+    if (!JENKINS_URL) {
+      console.warn("⚠️  [Jenkins] JENKINS_URL not configured");
+      jenkinsAvailable = false;
+      jenkinsCheckTime = now;
+      return false;
+    }
+
+    if (!JENKINS_TOKEN) {
+      console.warn("⚠️  [Jenkins] JENKINS_TOKEN not configured");
+      jenkinsAvailable = false;
+      jenkinsCheckTime = now;
+      return false;
+    }
+
+    // Try to connect to Jenkins
+    const auth = Buffer.from(`${JENKINS_USERNAME}:${JENKINS_TOKEN}`).toString("base64");
+    const response = await axios.get(`${JENKINS_URL}/api/json`, {
+      headers: { Authorization: `Basic ${auth}` },
+      timeout: JENKINS_RETRY_CONFIG.timeout,
+    });
+
+    if (response.status === 200) {
+      console.log("✅ [Jenkins] Connected successfully");
+      jenkinsAvailable = true;
+      jenkinsCheckTime = now;
+      return true;
+    }
+  } catch (error) {
+    console.warn("❌ [Jenkins] Connection failed:", error.message);
+    jenkinsAvailable = false;
+    jenkinsCheckTime = now;
+    return false;
+  }
+}
+
+/**
+ * Initialize Jenkins connection check on server startup
+ */
+export async function initializeJenkinsCheck() {
+  try {
+    console.log("🔍 [Jenkins] Checking Jenkins server availability...");
+    
+    // Validate configuration first
+    if (!JENKINS_URL) {
+      console.warn("⚠️  [Jenkins] JENKINS_URL environment variable not set");
+      console.warn("   Set JENKINS_URL in .env: JENKINS_URL=http://jenkins.example.com:8080");
+      return false;
+    }
+
+    if (!JENKINS_TOKEN) {
+      console.warn("⚠️  [Jenkins] JENKINS_TOKEN environment variable not set");
+      console.warn("   Set JENKINS_TOKEN in .env with your Jenkins API token");
+      return false;
+    }
+
+    if (!JENKINS_USERNAME) {
+      console.warn("⚠️  [Jenkins] JENKINS_USERNAME environment variable not set");
+      console.warn("   Set JENKINS_USER or JENKINS_USERNAME in .env");
+      return false;
+    }
+
+    const available = await isJenkinsAvailable();
+    
+    if (available) {
+      console.log(`✅ [Jenkins] Server is ready at ${JENKINS_URL}`);
+      console.log(`   Job: ${JENKINS_JOB_NAME}`);
+      console.log(`   User: ${JENKINS_USERNAME}`);
+      return true;
+    } else {
+      console.warn(`⚠️  [Jenkins] Server unavailable at ${JENKINS_URL}`);
+      console.warn("   Deployment tracking will use mock data until Jenkins is available");
+      return false;
+    }
+  } catch (error) {
+    console.error("❌ [Jenkins] Initialization error:", error.message);
+    return false;
+  }
+}
+
+/**
+ * Retry mechanism for Jenkins API requests
+ */
+export async function makeJenkinsRequestWithRetry(
+  fn,
+  description = "Jenkins API request",
+  retries = JENKINS_RETRY_CONFIG.maxRetries
+) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      const isLastAttempt = attempt === retries;
+      
+      if (isLastAttempt) {
+        console.error(`❌ [Jenkins] ${description} failed after ${retries + 1} attempts:`, error.message);
+        throw error;
+      }
+
+      const delay = JENKINS_RETRY_CONFIG.retryDelays[attempt] || JENKINS_RETRY_CONFIG.retryDelays[retries];
+      console.warn(`⚠️  [Jenkins] ${description} attempt ${attempt + 1} failed, retrying in ${delay}ms:`, error.message);
+      
+      // Wait before retrying
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+}
+
+/**
+ * Create Jenkins API client with proper headers and auth
+ */
+function getJenkinsClient() {
+  const auth = Buffer.from(`${JENKINS_USERNAME}:${JENKINS_TOKEN}`).toString("base64");
+  
+  return axios.create({
+    baseURL: JENKINS_URL,
+    headers: {
+      Authorization: `Basic ${auth}`,
+      "User-Agent": "DevOps-Dashboard",
+    },
+    timeout: JENKINS_RETRY_CONFIG.timeout,
+  });
+}
+
 /**
  * Get mock build data for development/testing
  */
@@ -73,16 +219,17 @@ function isJenkinsConfigured() {
 }
 
 /**
- * Get axios instance with Jenkins auth
+ * Get axios instance with Jenkins auth (uses both methods for compatibility)
  */
 function getJenkinsAxios() {
+  // Use Header-based auth for consistency with getJenkinsClient
   return axios.create({
     baseURL: JENKINS_URL,
-    auth: {
-      username: JENKINS_USERNAME,
-      password: JENKINS_TOKEN,
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${JENKINS_USERNAME}:${JENKINS_TOKEN}`).toString("base64")}`,
+      "User-Agent": "DevOps-Dashboard",
     },
-    timeout: 15000,
+    timeout: JENKINS_RETRY_CONFIG.timeout,
   });
 }
 

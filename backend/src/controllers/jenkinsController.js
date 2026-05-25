@@ -1,4 +1,5 @@
 import * as jenkinsService from "../services/jenkinsService.js";
+import * as deploymentTrackingService from "../services/deploymentTrackingService.js";
 
 /**
  * Trigger a new Jenkins build
@@ -358,6 +359,143 @@ export const syncBuilds = async (req, res, next) => {
       message: "Builds synced successfully",
       synced: result.count,
       builds: result.builds,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get deployment analytics and statistics
+ */
+export const getDeploymentAnalytics = async (req, res, next) => {
+  try {
+    const userId = req.user?.userId || req.user?.uid || "system";
+    const { days = 30 } = req.query;
+
+    const result = await deploymentTrackingService.getDeploymentAnalytics(
+      userId,
+      parseInt(days)
+    );
+
+    if (!result.success) {
+      return res.status(500).json({
+        error: result.error,
+        jenkinsAvailable: false,
+      });
+    }
+
+    res.json(result.analytics);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get deployment status by build number
+ */
+export const getDeploymentStatus = async (req, res, next) => {
+  try {
+    const { buildNumber } = req.params;
+
+    const result = await deploymentTrackingService.getDeploymentStatus(
+      parseInt(buildNumber)
+    );
+
+    if (!result.success) {
+      return res.status(500).json({
+        error: result.error,
+        jenkinsAvailable: result.jenkinsAvailable,
+      });
+    }
+
+    res.json(result.status);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get recent deployments
+ */
+export const getRecentDeployments = async (req, res, next) => {
+  try {
+    const userId = req.user?.userId || req.user?.uid || "system";
+    const { limit = 20 } = req.query;
+
+    const result = await deploymentTrackingService.getRecentDeployments(
+      userId,
+      parseInt(limit)
+    );
+
+    if (!result.success) {
+      return res.status(500).json({
+        error: result.error,
+        jenkinsAvailable: result.jenkinsAvailable,
+      });
+    }
+
+    res.json({
+      deployments: result.deployments,
+      count: result.count,
+      jenkinsAvailable: result.jenkinsAvailable,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get running deployments
+ */
+export const getRunningDeployments = async (req, res, next) => {
+  try {
+    const result = await deploymentTrackingService.getRunningDeployments();
+
+    if (!result.success) {
+      return res.status(500).json({
+        error: result.error,
+        jenkinsAvailable: result.jenkinsAvailable,
+        runningDeployments: [],
+      });
+    }
+
+    res.json({
+      runningDeployments: result.runningDeployments,
+      count: result.count,
+      jenkinsAvailable: result.jenkinsAvailable,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Sync all Jenkins builds to database
+ */
+export const syncAllBuilds = async (req, res, next) => {
+  try {
+    const userId = req.user?.userId || req.user?.uid || "system";
+    const { limit = 50 } = req.body;
+
+    const result = await deploymentTrackingService.syncJenkinsBuilds(
+      userId,
+      parseInt(limit)
+    );
+
+    if (!result.success) {
+      return res.status(500).json({
+        error: result.error,
+        jenkinsAvailable: result.jenkinsAvailable,
+      });
+    }
+
+    res.json({
+      message: "Builds synced successfully",
+      syncedCount: result.syncedCount,
+      totalBuilds: result.totalBuilds,
+      syncedBuilds: result.syncedBuilds,
+      jenkinsAvailable: result.jenkinsAvailable,
     });
   } catch (error) {
     next(error);

@@ -1,5 +1,6 @@
 import { exec, execFile } from "child_process";
 import { promisify } from "util";
+import { existsSync } from "fs";
 import { Log } from "../models/Logs.js";
 import { ContainerHealth } from "../models/ContainerHealth.js";
 import { Deployment } from "../models/Deployment.js";
@@ -8,6 +9,103 @@ import { emitContainerStatsUpdate, emitContainerStatusChange } from "./socketEve
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
+
+// Docker daemon availability tracking
+let dockerAvailable = null;
+let dockerCheckTime = 0;
+const DOCKER_CHECK_INTERVAL = 10000; // 10 seconds
+
+/**
+ * Check if Docker daemon is available
+ * Caches the result to avoid constant checking
+ */
+export async function isDockerAvailable() {
+  const now = Date.now();
+  
+  // Use cached result if recent
+  if (dockerAvailable !== null && (now - dockerCheckTime) < DOCKER_CHECK_INTERVAL) {
+    return dockerAvailable;
+  }
+
+  try {
+    // Check if socket file exists
+    const socketPath = process.env.DOCKER_HOST || "/var/run/docker.sock";
+    if (socketPath.startsWith("unix://")) {
+      const path = socketPath.replace("unix://", "");
+      if (!existsSync(path)) {
+        console.warn(`⚠️  [Docker] Socket not found: ${path}`);
+        dockerAvailable = false;
+        dockerCheckTime = now;
+        return false;
+      }
+    }
+
+    // Try a quick docker command
+    await execFileAsync("docker", ["version", "--format={{.Server.Version}}"]);
+    
+    console.log("✅ [Docker] Daemon connected and available");
+    dockerAvailable = true;
+    dockerCheckTime = now;
+    return true;
+  } catch (error) {
+    console.warn("❌ [Docker] Daemon unavailable:", error.message);
+    dockerAvailable = false;
+    dockerCheckTime = now;
+    return false;
+  }
+}
+
+/**
+ * Initialize Docker availability check on startup
+ */
+export async function initializeDockerCheck() {
+  try {
+    console.log("🔍 [Docker] Checking Docker daemon availability...");
+    const available = await isDockerAvailable();
+    if (available) {
+      console.log("✅ [Docker] Docker daemon is ready");
+    } else {
+      console.warn("⚠️  [Docker] Docker daemon is not available");
+      console.warn("   Mount /var/run/docker.sock to enable Docker monitoring");
+    }
+  } catch (error) {
+    console.error("❌ [Docker] Error during initialization:", error.message);
+  }
+}
+
+/**
+ * Graceful fallback response when Docker is unavailable
+ */
+function unavailableResponse(type = "info") {
+  const responses = {
+    containers: {
+      success: false,
+      error: "Docker daemon not available. Mount /var/run/docker.sock in container.",
+      dockerAvailable: false,
+      containers: [],
+      total: 0,
+    },
+    stats: {
+      success: false,
+      error: "Docker daemon not available. Mount /var/run/docker.sock in container.",
+      dockerAvailable: false,
+      stats: null,
+    },
+    info: {
+      success: false,
+      error: "Docker daemon not available. Mount /var/run/docker.sock in container.",
+      dockerAvailable: false,
+      info: null,
+    },
+    logs: {
+      success: false,
+      error: "Docker daemon not available.",
+      dockerAvailable: false,
+      logs: [],
+    },
+  };
+  return responses[type] || responses.info;
+}
 
 /**
  * Safely escape shell arguments to prevent command injection
@@ -26,6 +124,13 @@ function escapeShellArg(arg) {
  */
 export const getContainers = async () => {
   try {
+    // Check if Docker is available first
+    if (!(await isDockerAvailable())) {
+      console.warn("⚠️  [Docker] Docker unavailable - returning empty container list");
+      return unavailableResponse("containers");
+    }
+
+    console.log("📦 [Docker] Fetching containers...");
     const { stdout } = await execAsync(
       'docker ps --format "{{json .}}" -a'
     );
@@ -39,16 +144,20 @@ export const getContainers = async () => {
       }
     }).filter(Boolean);
 
+    console.log(`✅ [Docker] Found ${containers.length} containers`);
+
     return {
       success: true,
       containers,
       total: containers.length,
+      dockerAvailable: true,
     };
   } catch (error) {
     console.error("❌ [Docker] Error fetching containers:", error.message);
     return {
       success: false,
       error: error.message,
+      dockerAvailable: await isDockerAvailable(),
       containers: [],
       total: 0,
     };
@@ -60,12 +169,21 @@ export const getContainers = async () => {
  */
 export const getContainerStats = async (containerId) => {
   try {
+    // Check if Docker is available first
+    if (!(await isDockerAvailable())) {
+      console.warn(`⚠️  [Docker] Docker unavailable - cannot fetch stats for ${containerId}`);
+      return unavailableResponse("stats");
+    }
+
+    console.log(`📊 [Docker] Fetching stats for container: ${containerId}`);
     const safeId = escapeShellArg(containerId);
     const { stdout } = await execAsync(
       `docker stats ${safeId} --no-stream --format "{{json .}}"`
     );
 
     const stats = JSON.parse(stdout.trim());
+    console.log(`✅ [Docker] Stats retrieved for container: ${containerId}`);
+
     return {
       success: true,
       stats: {
@@ -79,12 +197,14 @@ export const getContainerStats = async (containerId) => {
         blockOut: stats.BlockIO?.split("/")[1] || "0B",
         pids: parseInt(stats.PIDs) || 0,
       },
+      dockerAvailable: true,
     };
   } catch (error) {
     console.error("❌ [Docker] Error fetching stats for", containerId, ":", error.message);
     return {
       success: false,
       error: error.message,
+      dockerAvailable: await isDockerAvailable(),
       stats: null,
     };
   }
@@ -258,6 +378,13 @@ export const removeContainer = async (containerId, force = false) => {
  */
 export const getContainerLogs = async (containerId, lines = 50) => {
   try {
+    // Check if Docker is available first
+    if (!(await isDockerAvailable())) {
+      console.warn(`⚠️  [Docker] Docker unavailable - cannot fetch logs for ${containerId}`);
+      return unavailableResponse("logs");
+    }
+
+    console.log(`📝 [Docker] Fetching logs for container: ${containerId}`);
     const safeId = escapeShellArg(containerId);
     const safeLines = escapeShellArg(String(lines));
     
@@ -267,16 +394,19 @@ export const getContainerLogs = async (containerId, lines = 50) => {
 
     const logLines = stdout.split("\n").filter(l => l);
 
+    console.log(`✅ [Docker] Logs retrieved for container: ${containerId}`);
     return {
       success: true,
       containerId,
       logs: logLines,
+      dockerAvailable: true,
     };
   } catch (error) {
     console.error("❌ [Docker] Error fetching logs:", error.message);
     return {
       success: false,
       error: error.message,
+      dockerAvailable: await isDockerAvailable(),
       containerId,
       logs: [],
     };
@@ -295,6 +425,19 @@ const normalizeContainerHealth = (value) => {
 
 export const getContainerHealth = async (containerId) => {
   try {
+    // Check if Docker is available first
+    if (!(await isDockerAvailable())) {
+      console.warn(`⚠️  [Docker] Docker unavailable - cannot fetch health for ${containerId}`);
+      return {
+        success: false,
+        error: "Docker daemon not available",
+        dockerAvailable: false,
+        containerId,
+        health: "none",
+      };
+    }
+
+    console.log(`🏥 [Docker] Checking health for container: ${containerId}`);
     const safeId = escapeShellArg(containerId);
     const { stdout } = await execFileAsync("docker", [
       "inspect",
@@ -304,15 +447,19 @@ export const getContainerHealth = async (containerId) => {
 
     const status = normalizeContainerHealth(stdout);
 
+    console.log(`✅ [Docker] Health status for ${containerId}: ${status}`);
     return {
       success: true,
       containerId,
       health: status,
+      dockerAvailable: true,
     };
   } catch (error) {
+    console.error(`❌ [Docker] Error checking health for ${containerId}:`, error.message);
     return {
       success: false,
       error: error.message,
+      dockerAvailable: await isDockerAvailable(),
       containerId,
       health: "none",
     };
@@ -453,11 +600,21 @@ export const deployContainer = async (options) => {
  */
 export const getDockerInfo = async () => {
   try {
+    // Check if Docker is available first
+    if (!(await isDockerAvailable())) {
+      console.warn("⚠️  [Docker] Docker unavailable - returning empty system info");
+      return unavailableResponse("info");
+    }
+
+    console.log("🐳 [Docker] Fetching Docker system info...");
     const { stdout } = await execAsync("docker info --format json");
     const info = JSON.parse(stdout);
 
+    console.log(`✅ [Docker] System info retrieved: ${info.ContainersRunning} running, ${info.ContainersStopped} stopped`);
+
     return {
       success: true,
+      dockerAvailable: true,
       info: {
         containers: info.Containers,
         containersPaused: info.ContainersPaused,
@@ -474,6 +631,7 @@ export const getDockerInfo = async () => {
     return {
       success: false,
       error: error.message,
+      dockerAvailable: await isDockerAvailable(),
       info: null,
     };
   }
@@ -533,6 +691,19 @@ export const restartContainer = async (containerId, timeout = 10) => {
  */
 export const getAllContainerStats = async () => {
   try {
+    // Check if Docker is available first
+    if (!(await isDockerAvailable())) {
+      console.warn("⚠️  [Docker] Docker unavailable - cannot fetch all container stats");
+      return {
+        success: false,
+        error: "Docker daemon not available. Mount /var/run/docker.sock in container.",
+        dockerAvailable: false,
+        stats: [],
+        count: 0,
+      };
+    }
+
+    console.log("📊 [Docker] Fetching stats for all containers...");
     const { stdout } = await execAsync(
       'docker stats --all --no-stream --format "{{json .}}"'
     );
@@ -558,8 +729,11 @@ export const getAllContainerStats = async () => {
       }
     }).filter(Boolean);
 
+    console.log(`✅ [Docker] Retrieved stats for ${stats.length} containers`);
+
     return {
       success: true,
+      dockerAvailable: true,
       stats,
       count: stats.length,
     };
@@ -568,6 +742,7 @@ export const getAllContainerStats = async () => {
     return {
       success: false,
       error: error.message,
+      dockerAvailable: await isDockerAvailable(),
       stats: [],
       count: 0,
     };

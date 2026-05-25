@@ -1,28 +1,52 @@
 # Jenkins Integration Quick Start 🚀
 
+## Overview
+
+Complete Jenkins API integration with deployment tracking, analytics, real-time monitoring, and automatic retry logic.
+
+**New Features Added:**
+- ✅ Deployment analytics with success rates  
+- ✅ Real-time deployment status tracking
+- ✅ Automatic retry with exponential backoff
+- ✅ Pipeline stage tracking and timing
+- ✅ Build sync to MongoDB
+- ✅ Graceful degradation when Jenkins unavailable
+
 ## Prerequisites
 
 1. **Jenkins Instance Running**
    - URL: `http://localhost:8080` (or set `JENKINS_URL` in .env)
    - Job Name: `devops-hub-deploy` (or set `JENKINS_JOB_NAME` in .env)
 
-2. **Jenkins API Token**
+2. **Jenkins API Token** (Required for production)
    - Go to Jenkins Dashboard → Your User → Configure
-   - Generate API Token under "API Token" section
+   - Click "Add new Token" under "API Token" section
    - Copy token and set in `.env` as `JENKINS_TOKEN`
+   - For testing: Set `JENKINS_TOKEN=mock-mode` to use mock data
 
 3. **MongoDB Atlas Connection**
-   - Connection string in `.env` as `MONGODB_URI`
-   - BuildHistory collection will be auto-created
+   - Connection string in `.env` as `MONGO_URI`
+   - Deployment collection will be auto-created
 
 4. **Environment Variables** (in `backend/.env`)
    ```bash
+   # Jenkins Configuration
    JENKINS_URL=http://localhost:8080
-   JENKINS_USERNAME=admin
+   JENKINS_USER=admin
    JENKINS_TOKEN=your-api-token-here
    JENKINS_JOB_NAME=devops-hub-deploy
-   MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/dbname
+   JENKINS_AUTO_CREATE_JOB=true
+   
+   # Features
+   ENABLE_JENKINS_MONITORING=true
+   ENABLE_DEPLOYMENT_TRACKING=true
+   
+   # Database
+   MONGO_URI=mongodb+srv://username:password@cluster.mongodb.net/dbname
+   
+   # Server
    JWT_SECRET=dev-secret-key
+   PORT=5000
    ```
 
 ## Starting the System
@@ -33,7 +57,16 @@ cd backend
 npm install
 npm start
 ```
-Expected: Server running on http://localhost:5000
+
+Expected output:
+```
+🔄 [Server] Checking Jenkins server...
+✅ [Jenkins] Server is ready at http://localhost:8080
+   Job: devops-hub-deploy
+   User: admin
+
+✅ Backend listening on port 5000
+```
 
 ### 2. Start Frontend (in new terminal)
 ```bash
@@ -41,9 +74,48 @@ cd frontend
 npm install
 npm run dev
 ```
-Expected: Frontend on http://localhost:5173
 
-## API Endpoints
+## New API Endpoints
+
+### Deployment Analytics
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  'http://localhost:5000/api/jenkins/deployments/analytics?days=30'
+```
+Returns: Success rates, duration stats, failure trends
+
+### Running Deployments
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  'http://localhost:5000/api/jenkins/deployments/running'
+```
+Returns: Currently executing deployments with progress
+
+### Recent Deployments
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  'http://localhost:5000/api/jenkins/deployments?limit=10'
+```
+Returns: Last 10 deployments from database
+
+### Deployment Status by Build Number
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  'http://localhost:5000/api/jenkins/deployments/321'
+```
+Returns: Build #321 status with all pipeline stages
+
+### Sync Builds to Database
+```bash
+curl -X POST \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"limit": 50}' \
+  'http://localhost:5000/api/jenkins/deployments/sync'
+```
+Returns: Number of builds synced
+
+## API Endpoints (Existing)
 
 ### 1. Trigger Build
 ```bash

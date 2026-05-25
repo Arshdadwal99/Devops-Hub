@@ -114,4 +114,39 @@ router.get("/builds/branch/:branch", jenkinsController.getByBranch);
  */
 router.get("/statistics", jenkinsController.getStatistics);
 
+// ============ Deployment Tracking ============
+
+/**
+ * GET /api/jenkins/deployments/analytics
+ * Get deployment analytics and success rates
+ * Query: days (default: 30)
+ */
+router.get("/deployments/analytics", jenkinsController.getDeploymentAnalytics);
+
+/**
+ * GET /api/jenkins/deployments/:buildNumber
+ * Get deployment status by build number
+ */
+router.get("/deployments/:buildNumber", jenkinsController.getDeploymentStatus);
+
+/**
+ * GET /api/jenkins/deployments
+ * Get recent deployments from database
+ * Query: limit (default: 20)
+ */
+router.get("/deployments", jenkinsController.getRecentDeployments);
+
+/**
+ * GET /api/jenkins/deployments/running
+ * Get currently running deployments
+ */
+router.get("/deployments/running", jenkinsController.getRunningDeployments);
+
+/**
+ * POST /api/jenkins/deployments/sync
+ * Sync Jenkins builds to deployment database
+ * Body: { limit? } (default: 50)
+ */
+router.post("/deployments/sync", jenkinsController.syncAllBuilds);
+
 export default router;

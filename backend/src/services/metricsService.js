@@ -106,26 +106,38 @@ export const getSystemMetrics = async (userId) => {
     metricsCache = metrics;
     lastCacheTime = now;
 
-    // Save to database asynchronously
+    // Save to database asynchronously with proper error handling
     if (userId) {
-      await Metrics.create({
-        userId,
-        cpu: cpuPercent,
-        memory: memPercent,
-        disk: diskPercent,
-        network: networkInOut,
-        uptime: Math.round(osInfo.uptime || 0),
-        latency: 0,
-        activeConnections: processes?.running || 0,
-        containerCount: containersResult.containers?.length || 0,
-        containerHealth,
-        systemLoad: {
-          load1: cpuData.avgLoad || 0,
-          load5: cpuData.avgLoad || 0,
-          load15: cpuData.avgLoad || 0,
-        },
-        timestamp: new Date(),
-      }).catch(err => console.warn("⚠️ Failed to save metrics:", err.message));
+      try {
+        const saved = await Metrics.create({
+          userId,
+          cpu: cpuPercent,
+          memory: memPercent,
+          disk: diskPercent,
+          network: networkInOut,
+          uptime: Math.round(osInfo.uptime || 0),
+          latency: 0,
+          activeConnections: processes?.running || 0,
+          containerCount: containersResult.containers?.length || 0,
+          containerHealth,
+          systemLoad: {
+            load1: cpuData.avgLoad || 0,
+            load5: cpuData.avgLoad || 0,
+            load15: cpuData.avgLoad || 0,
+          },
+          timestamp: new Date(),
+        });
+        console.log(`💾 [Metrics] Saved to database (ID: ${saved._id})`);
+      } catch (err) {
+        if (err.message.includes("buffering timed out")) {
+          console.warn("⚠️ [Metrics] Database buffer timeout - connection issue");
+        } else if (err.message.includes("connect")) {
+          console.warn("⚠️ [Metrics] Failed to save - database not connected");
+        } else {
+          console.warn(`⚠️ [Metrics] Failed to save: ${err.message}`);
+        }
+        // Metrics are still returned even if save fails
+      }
     }
 
     console.log(`✅ [Metrics] CPU: ${cpuPercent}%, Memory: ${memPercent}%, Containers: ${containerHealth.running}/${containerHealth.running + containerHealth.stopped + containerHealth.failed}`);
