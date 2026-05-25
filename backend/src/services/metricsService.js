@@ -1,6 +1,7 @@
 import si from "systeminformation";
 import { Metrics } from "../models/Metrics.js";
 import { getContainers, getDockerInfo } from "./dockerService.js";
+import { isDbConnected } from "../db.js";
 
 let lastMetrics = null;
 let metricsCache = null;
@@ -107,7 +108,7 @@ export const getSystemMetrics = async (userId) => {
     lastCacheTime = now;
 
     // Save to database asynchronously with proper error handling
-    if (userId) {
+    if (userId && isDbConnected()) {
       try {
         const saved = await Metrics.create({
           userId,
@@ -138,6 +139,8 @@ export const getSystemMetrics = async (userId) => {
         }
         // Metrics are still returned even if save fails
       }
+    } else if (userId && !isDbConnected()) {
+      console.warn("⚠️  Database unavailable - skipping metrics save to database");
     }
 
     console.log(`✅ [Metrics] CPU: ${cpuPercent}%, Memory: ${memPercent}%, Containers: ${containerHealth.running}/${containerHealth.running + containerHealth.stopped + containerHealth.failed}`);

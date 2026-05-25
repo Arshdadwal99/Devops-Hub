@@ -205,6 +205,12 @@ export const deleteAlert = async (alertId) => {
 export const generateMetricAlerts = async (userId, metrics) => {
   const alerts = [];
 
+  // Skip alert generation if database is not connected
+  if (!isDbConnected()) {
+    console.warn("⚠️  Database unavailable - skipping alert generation");
+    return { count: 0, alerts: [] };
+  }
+
   try {
     // Check CPU high
     if (metrics.cpu > 85) {

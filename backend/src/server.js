@@ -98,6 +98,35 @@ app.use("/api/webhooks", webhookRoutes);
 app.post("/api/webhook", handleGitHubWebhook);
 app.post("/webhook", handleGitHubWebhook);
 
+// Middleware to check MongoDB connection for database-dependent routes
+app.use((req, res, next) => {
+  // Only check for API routes that typically need the database
+  const dbDependentPaths = [
+    "/api/dashboard",
+    "/api/metrics",
+    "/api/deployments",
+    "/api/alerts",
+    "/api/monitoring",
+    "/api/analyze",
+    "/api/logs",
+    "/api/automation",
+  ];
+
+  const needsDb = dbDependentPaths.some(path => req.path.startsWith(path));
+
+  if (needsDb && !isDbConnected()) {
+    console.warn(`⚠️  Database unavailable - request rejected: ${req.method} ${req.path}`);
+    return res.status(503).json({
+      success: false,
+      error: "Database unavailable",
+      message: "MongoDB is not connected. Please try again later.",
+      dbConnected: false,
+    });
+  }
+
+  next();
+});
+
 // Protected routes
 app.use("/api/dashboard", verifyToken, dashboardRoutes);
 app.use("/api/metrics", verifyToken, metricsRoutes);
@@ -286,6 +315,12 @@ let metricsInterval;
 const startMetricsCollection = async () => {
   metricsInterval = setInterval(async () => {
     try {
+      // Skip if database is not connected
+      if (!isDbConnected()) {
+        console.warn("⚠️  Database unavailable - skipping metrics collection");
+        return;
+      }
+
       // Collect metrics from all active users (using a placeholder userId)
       const userId = "system";
       const metrics = await getSystemMetrics(userId);
