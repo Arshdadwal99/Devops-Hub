@@ -49,6 +49,11 @@ const __dirname = path.dirname(__filename);
 const frontendDistPath = path.resolve(__dirname, "../../frontend/dist");
 const frontendIndexPath = path.join(frontendDistPath, "index.html");
 
+// Log frontend paths at startup for debugging
+console.log(`📁 Frontend dist path: ${frontendDistPath}`);
+console.log(`📄 Frontend index path: ${frontendIndexPath}`);
+console.log(`✓ Frontend static path exists: ${existsSync(frontendDistPath)}`);
+
 // Middleware
 app.use(
   cors({
@@ -205,17 +210,37 @@ io.on("connection", (socket) => {
 export { io };
 
 if (existsSync(frontendIndexPath)) {
+  // Serve static files from frontend/dist
   app.use(express.static(frontendDistPath));
 
-  // Serve frontend for all non-API routes
+  // Serve frontend for all non-API routes (SPA fallback)
   app.use((req, res, next) => {
+    // Skip API and webhook routes
     if (req.path.startsWith("/api") || req.path.startsWith("/webhook")) {
       next();
       return;
     }
 
-    res.sendFile(frontendIndexPath);
+    // Send index.html with error handling
+    res.sendFile(frontendIndexPath, (err) => {
+      if (err) {
+        console.error(`❌ Error serving frontend file ${frontendIndexPath}:`, err.message);
+        
+        // If sendFile failed, try to send a basic response
+        if (!res.headersSent) {
+          res.status(500).json({
+            error: "Failed to serve frontend",
+            message: err.message,
+          });
+        }
+      } else {
+        console.log(`✅ Served frontend from ${frontendIndexPath}`);
+      }
+    });
   });
+} else {
+  console.warn(`⚠️  Frontend dist path not found: ${frontendDistPath}`);
+  console.warn(`⚠️  Frontend static files will not be served`);
 }
 
 // Error handling middleware
@@ -336,17 +361,30 @@ async function startServer() {
     // Start server - bind to 0.0.0.0 for Docker/EC2 external access
     const PORT = process.env.PORT || 5000;
     server.listen(PORT, '0.0.0.0', () => {
+      console.log(`\n${'='.repeat(60)}`);
       console.log(`✅ Backend listening on port ${PORT}`);
+      console.log(`${'='.repeat(60)}`);
       console.log(`📍 API Base: http://0.0.0.0:${PORT}/api`);
       console.log(`🌐 Accessible at: http://localhost:${PORT}/api (local)`);
       console.log(`🚀 Docker/EC2: Accessible on all network interfaces on port ${PORT}`);
       console.log(`🔌 Socket.io: ws://0.0.0.0:${PORT}`);
+      
+      if (existsSync(frontendDistPath)) {
+        console.log(`✅ Frontend: Serving static files from ${frontendDistPath}`);
+        console.log(`🖥️  Web UI: http://localhost:${PORT} (local)`);
+      } else {
+        console.warn(`⚠️  Frontend dist not found at ${frontendDistPath}`);
+      }
+      
       if (!isDbConnected()) {
         console.log("⚠️  MongoDB is not connected. Some features will not work.");
         console.log("    To restore: Check MONGO_URI and restart the server");
       } else {
-        console.log("✅ [Server] All systems ready!");
+        console.log("✅ MongoDB connected");
       }
+      
+      console.log(`✅ [Server] All systems ready!`);
+      console.log(`${'='.repeat(60)}\n`);
     });
 
     // Start metrics collection
