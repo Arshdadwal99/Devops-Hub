@@ -464,15 +464,21 @@ async function startServer() {
       });
     });
 
-    // Handle uncaught exceptions
+    // Handle uncaught exceptions - log but don't crash server
     process.on("uncaughtException", (error) => {
-      console.error("❌ [Server] Uncaught exception:", error);
-      process.exit(1);
+      console.error("❌ [Server] Uncaught exception handled safely:", error.message);
+      console.error("📍 [Server] Stack trace:", error.stack);
+      console.warn("⚠️  Runtime error handled safely - server continues running");
+      // DO NOT call process.exit(1) - keep server alive
     });
 
     process.on("unhandledRejection", (reason) => {
-      console.error("❌ [Server] Unhandled rejection:", reason);
-      process.exit(1);
+      console.error("❌ [Server] Unhandled rejection handled safely:", reason);
+      if (reason instanceof Error) {
+        console.error("📍 [Server] Stack trace:", reason.stack);
+      }
+      console.warn("⚠️  Runtime error handled safely - server continues running");
+      // DO NOT call process.exit(1) - keep server alive
     });
 
   } catch (error) {
