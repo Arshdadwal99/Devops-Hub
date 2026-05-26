@@ -6,27 +6,35 @@ services:
       - "27017:27017"
     volumes:
       - mongo-data:/data/db
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   backend:
     build:
-      context: ./backend
-    env_file:
-      - ./backend/.env
-    restart: unless-stopped
+      context: .
+      dockerfile: Dockerfile
     environment:
+      NODE_ENV: production
       PORT: 5000
-      CLIENT_ORIGIN: http://localhost:8080
+      MONGO_URI: mongodb://mongo:27017/devops-hub
+      CLIENT_ORIGIN: http://localhost:5000
     ports:
       - "5000:5000"
-
-  frontend:
-    build:
-      context: ./frontend
-    restart: unless-stopped
     depends_on:
-      - backend
-    ports:
-      - "8080:80"
+      mongo:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:5000/api/health', (r) => {if (r.statusCode !== 200) throw new Error(r.statusCode)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
 volumes:
   mongo-data:

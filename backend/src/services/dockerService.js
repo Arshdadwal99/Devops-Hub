@@ -439,9 +439,10 @@ export const getContainerHealth = async (containerId) => {
 
     console.log(`🏥 [Docker] Checking health for container: ${containerId}`);
     const safeId = escapeShellArg(containerId);
+    // Use conditional template to handle containers without health checks gracefully
     const { stdout } = await execFileAsync("docker", [
       "inspect",
-      "--format={{.State.Health.Status}}",
+      "--format={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}",
       safeId,
     ]);
 
@@ -943,85 +944,117 @@ export const getDeploymentStats = async (userId, days = 30) => {
 export const startContainerMonitoring = async (io) => {
   try {
     const monitoringInterval = setInterval(async () => {
-      const containerResult = await getContainers();
+      try {
+        // Add 8 second timeout to container monitoring
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error("Container monitoring timeout")), 8000)
+        );
+        
+        const containerResultPromise = Promise.resolve(getContainers());
+        const containerResult = await Promise.race([containerResultPromise, timeoutPromise]);
 
-      if (!containerResult.success) {
-        console.error("❌ [Docker Monitor] Failed to get containers");
-        return;
-      }
+        if (!containerResult.success) {
+          console.error("❌ [Docker Monitor] Failed to get containers");
+          return;
+        }
 
-      for (const container of containerResult.containers) {
-        const statsResult = await getContainerStats(container.ID);
-        const healthResult = await getContainerHealth(container.ID);
+        for (const container of containerResult.containers) {
+          try {
+            // Add timeout for each container's stats (4 second timeout)
+            const statsTimeoutPromise = new Promise((_, reject) => 
+              setTimeout(() => reject(new Error("Stats fetch timeout")), 4000)
+            );
+            
+            const statsResultPromise = Promise.resolve(getContainerStats(container.ID));
+            const healthResultPromise = Promise.resolve(getContainerHealth(container.ID));
+            
+            const [statsResult, healthResult] = await Promise.all([
+              Promise.race([statsResultPromise, statsTimeoutPromise]),
+              Promise.race([healthResultPromise, statsTimeoutPromise])
+            ]);
 
-        if (statsResult.success && healthResult.success) {
-          const healthData = {
-            containerId: container.ID,
-            containerName: container.Names,
-            image: container.Image,
-            status: container.State,
-            health: healthResult.health,
-            ...statsResult.stats,
-          };
-
-          // Record to database
-          await recordContainerHealth(container.ID, healthData);
-
-          // Emit WebSocket event
-          if (io) {
-            io.to("docker-monitor").emit("docker:container-update", {
-              containerId: container.ID,
-              containerName: container.Names,
-              ...healthData,
-              timestamp: new Date(),
-            });
-
-            emitContainerStatusChange(healthData);
-            emitContainerStatsUpdate({
-              containerId: container.ID,
-              containerName: container.Names,
-              cpu: healthData.cpuPercent,
-              memory: healthData.memoryPercent,
-              network: {
-                in: healthData.networkIn,
-                out: healthData.networkOut,
-              },
-            });
-          }
-
-          if (container.State !== "running") {
-            const recentCrashAlert = await Log.findOne({
-              source: "docker",
-              logType: "error",
-              containerName: container.Names,
-              timestamp: { $gte: new Date(Date.now() - 5 * 60 * 1000) },
-            });
-
-            if (!recentCrashAlert) {
-              await Log.create({
-                userId: "system",
-                source: "docker",
-                logType: "error",
+            if (statsResult.success && healthResult.success) {
+              const healthData = {
+                containerId: container.ID,
                 containerName: container.Names,
-                message: `Container ${container.Names} is ${container.State}`,
-                rawLog: JSON.stringify(container),
-                metadata: { stage: "container-monitor", status: container.State },
-              });
+                image: container.Image,
+                status: container.State,
+                health: healthResult.health,
+                ...statsResult.stats,
+              };
 
-              await createAlert("system", {
-                type: "container_stopped",
-                severity: "critical",
-                title: "Container Stopped",
-                message: `${container.Names} is ${container.State}`,
-                resourceType: "container",
-                resourceId: container.ID,
-                metadata: { container: container.Names },
-              });
+              // Record to database
+              await recordContainerHealth(container.ID, healthData);
+
+              // Emit WebSocket event
+              if (io) {
+                io.to("docker-monitor").emit("docker:container-update", {
+                  containerId: container.ID,
+                  containerName: container.Names,
+                  ...healthData,
+                  timestamp: new Date(),
+                });
+
+                emitContainerStatusChange(healthData);
+                emitContainerStatsUpdate({
+                  containerId: container.ID,
+                  containerName: container.Names,
+                  cpu: healthData.cpuPercent,
+                  memory: healthData.memoryPercent,
+                  network: {
+                    in: healthData.networkIn,
+                    out: healthData.networkOut,
+                  },
+                });
+              }
+
+              if (container.State !== "running") {
+                const recentCrashAlert = await Log.findOne({
+                  source: "docker",
+                  logType: "error",
+                  containerName: container.Names,
+                  timestamp: { $gte: new Date(Date.now() - 5 * 60 * 1000) },
+                });
+
+                if (!recentCrashAlert) {
+                  await Log.create({
+                    userId: "system",
+                    source: "docker",
+                    logType: "error",
+                    containerName: container.Names,
+                    message: `Container ${container.Names} is ${container.State}`,
+                    rawLog: JSON.stringify(container),
+                    metadata: { stage: "container-monitor", status: container.State },
+                  });
+
+                  await createAlert("system", {
+                    type: "container_stopped",
+                    severity: "critical",
+                    title: "Container Stopped",
+                    message: `${container.Names} is ${container.State}`,
+                    resourceType: "container",
+                    resourceId: container.ID,
+                    metadata: { container: container.Names },
+                  });
+                }
+              }
             }
+          } catch (containerError) {
+            console.warn(`⚠️  [Docker Monitor] Error processing container ${container.ID}:`, containerError.message);
           }
         }
+      } catch (iterationError) {
+        console.error("❌ [Docker Monitor] Error in monitoring iteration:", iterationError.message);
+        
+        // Emit error status to clients
+        if (io) {
+          io.to("docker-monitor").emit("docker:monitor-error", {
+            error: iterationError.message,
+            timestamp: new Date(),
+          });
+        }
       }
-    }, 15000); // Monitor every 15 seconds
+    }, 30000); // Monitor every 30 seconds (reduced frequency)
 
     console.log("✅ [Docker Monitor] Started container health monitoring");
 

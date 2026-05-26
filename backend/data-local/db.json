@@ -1,0 +1,14 @@
+{
+  "users": [
+    {
+      "_id": "1779820647642",
+      "email": "arshdadwal99@gmail.com",
+      "name": "arshdadwal99",
+      "firebaseUid": "QgoApbKDu4We88a6b4PFsJyfFAp2",
+      "authProvider": "firebase",
+      "createdAt": "2026-05-26T18:37:27.642Z"
+    }
+  ],
+  "dashboards": [],
+  "logs": []
+}

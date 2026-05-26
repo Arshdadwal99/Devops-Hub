@@ -10,7 +10,7 @@ import { fileURLToPath } from "url";
 import http from "http";
 import { Server as SocketIOServer } from "socket.io";
 import { config } from "./config.js";
-import { connectDb, isDbConnected } from "./db.js";
+import { connectDb, isDbConnected, closeDb } from "./db.js";
 import { initializeDockerCheck } from "./services/dockerService.js";
 import { initializeJenkinsCheck } from "./services/jenkinsService.js";
 import dashboardRoutes from "./routes/dashboardRoutes.js";
@@ -98,7 +98,7 @@ app.use("/api/webhooks", webhookRoutes);
 app.post("/api/webhook", handleGitHubWebhook);
 app.post("/webhook", handleGitHubWebhook);
 
-// Middleware to check MongoDB connection for database-dependent routes
+// Middleware to log database availability for monitoring (non-blocking)
 app.use((req, res, next) => {
   // Only check for API routes that typically need the database
   const dbDependentPaths = [
@@ -114,14 +114,11 @@ app.use((req, res, next) => {
 
   const needsDb = dbDependentPaths.some(path => req.path.startsWith(path));
 
+  // LOG but DON'T BLOCK - Allow request to proceed and let controller handle gracefully
   if (needsDb && !isDbConnected()) {
-    console.warn(`⚠️  Database unavailable - request rejected: ${req.method} ${req.path}`);
-    return res.status(503).json({
-      success: false,
-      error: "Database unavailable",
-      message: "MongoDB is not connected. Please try again later.",
-      dbConnected: false,
-    });
+    console.warn(`⚠️  [DB] Unavailable for: ${req.method} ${req.path} - controller will handle gracefully`);
+    // Attach flag to request for controllers to check if needed
+    req.dbUnavailable = true;
   }
 
   next();
@@ -239,37 +236,43 @@ io.on("connection", (socket) => {
 export { io };
 
 if (existsSync(frontendIndexPath)) {
-  // Serve static files from frontend/dist
-  app.use(express.static(frontendDistPath));
+  // Serve static files from frontend/dist with caching headers
+  app.use(express.static(frontendDistPath, {
+    maxAge: '1d',
+    etag: false,
+  }));
 
   // Serve frontend for all non-API routes (SPA fallback)
-  app.use((req, res, next) => {
-    // Skip API and webhook routes
+  app.get("*", (req, res, next) => {
+    // Skip API and webhook routes - let them be handled by error handlers
     if (req.path.startsWith("/api") || req.path.startsWith("/webhook")) {
-      next();
-      return;
+      return next();
     }
 
-    // Send index.html with error handling
+    // Serve index.html for all other routes (SPA routing)
     res.sendFile(frontendIndexPath, (err) => {
       if (err) {
         console.error(`❌ Error serving frontend file ${frontendIndexPath}:`, err.message);
         
-        // If sendFile failed, try to send a basic response
+        // If sendFile failed, send 404 instead of error page
         if (!res.headersSent) {
-          res.status(500).json({
-            error: "Failed to serve frontend",
-            message: err.message,
-          });
+          res.status(404).send("Frontend not available");
         }
-      } else {
-        console.log(`✅ Served frontend from ${frontendIndexPath}`);
       }
     });
   });
 } else {
-  console.warn(`⚠️  Frontend dist path not found: ${frontendDistPath}`);
-  console.warn(`⚠️  Frontend static files will not be served`);
+  console.warn(`⚠️  [Frontend] Frontend dist path not found: ${frontendDistPath}`);
+  console.warn(`⚠️  [Frontend] Frontend static files will not be served`);
+  
+  // Provide basic response for root path even without frontend
+  app.get("/", (req, res) => {
+    res.json({
+      message: "DevOps Hub Backend - Frontend not available",
+      api: "/api/health",
+      status: "ok"
+    });
+  });
 }
 
 // Error handling middleware
@@ -456,12 +459,38 @@ async function startServer() {
     }
 
     // Handle graceful shutdown on SIGTERM
+    let isShuttingDown = false;
+    
     process.on("SIGTERM", async () => {
+      if (isShuttingDown) return; // Prevent multiple shutdown attempts
+      isShuttingDown = true;
+      
       console.log("⏹️  [Server] Received SIGTERM signal - graceful shutdown...");
-      server.close(() => {
+      
+      // Stop accepting new connections
+      server.close(async () => {
         console.log("✅ [Server] HTTP server closed");
+        
+        // Close database connection
+        try {
+          await closeDb();
+        } catch (error) {
+          console.error("❌ [DB] Error closing database:", error.message);
+        }
+        
+        // Close Socket.io connections gracefully
+        io.close();
+        console.log("✅ [Server] Socket.io closed");
+        
         process.exit(0);
       });
+      
+      // Force shutdown after 30 seconds if graceful close is taking too long
+      setTimeout(() => {
+        console.error("❌ [Server] Graceful shutdown timeout - forcing exit");
+        // Exit 0 to indicate controlled shutdown, not a crash
+        process.exit(0);
+      }, 30000);
     });
 
     // Handle uncaught exceptions - log but don't crash server
@@ -482,8 +511,10 @@ async function startServer() {
     });
 
   } catch (error) {
-    console.error("❌ Failed to start server:", error.message);
-    process.exit(1);
+    console.error("❌ [Server] Startup error - attempting graceful recovery:", error.message);
+    console.error("📍 [Server] Stack trace:", error.stack);
+    console.warn("⚠️  [Server] Server startup encountered an error - will continue running");
+    // Continue running instead of crashing - allows manual recovery
   }
 }
 

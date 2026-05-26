@@ -19,42 +19,63 @@ export const getPipelineStatus = async (req, res) => {
       });
     }
 
-    const response = await fetch(
-      `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/actions/runs`,
-      {
-        headers: {
-          Authorization: `Bearer ${GITHUB_TOKEN}`,
-          Accept: "application/vnd.github.v3+json",
-        },
+    // Add timeout to fetch request
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
+    try {
+      const response = await fetch(
+        `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/actions/runs`,
+        {
+          headers: {
+            Authorization: `Bearer ${GITHUB_TOKEN}`,
+            Accept: "application/vnd.github.v3+json",
+          },
+          signal: controller.signal,
+        }
+      );
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`GitHub API Error: ${response.statusText}`);
       }
-    );
 
-    if (!response.ok) {
-      throw new Error(`GitHub API Error: ${response.statusText}`);
-    }
+      const data = await response.json();
+      const latestRun = data.workflow_runs[0];
 
-    const data = await response.json();
-    const latestRun = data.workflow_runs[0];
+      if (!latestRun) {
+        return res.json({
+          status: "unknown",
+          conclusion: null,
+          workflow_name: "No workflows found",
+          last_commit: "N/A",
+          timestamp: new Date(),
+        });
+      }
 
-    if (!latestRun) {
-      return res.json({
-        status: "unknown",
-        conclusion: null,
-        workflow_name: "No workflows found",
-        last_commit: "N/A",
-        timestamp: new Date(),
+      res.json({
+        status: latestRun.status,
+        conclusion: latestRun.conclusion,
+        workflow_name: latestRun.name,
+        last_commit: latestRun.head_commit?.message || "N/A",
+        timestamp: latestRun.updated_at,
+        run_number: latestRun.run_number,
+        branch: latestRun.head_branch,
       });
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      
+      if (fetchError.name === 'AbortError') {
+        console.error("GitHub pipeline status timeout");
+        return res.status(504).json({
+          error: "GitHub API timeout",
+          message: "GitHub is taking too long to respond",
+        });
+      }
+      
+      throw fetchError;
     }
-
-    res.json({
-      status: latestRun.status,
-      conclusion: latestRun.conclusion,
-      workflow_name: latestRun.name,
-      last_commit: latestRun.head_commit?.message || "N/A",
-      timestamp: latestRun.updated_at,
-      run_number: latestRun.run_number,
-      branch: latestRun.head_branch,
-    });
   } catch (error) {
     console.error("Pipeline status error:", error);
     res.status(500).json({

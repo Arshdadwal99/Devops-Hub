@@ -31,12 +31,10 @@ const mongooseOptions = {
   // Server monitoring
   monitorCommands: true,
   
-  // Buffering control
+  // Buffering control - removed bufferMaxEntries as it's not supported in newer mongoose versions
   bufferCommands: false, // Don't buffer if disconnected (fail fast)
-  bufferMaxEntries: 0, // Prevent unbounded memory growth
   
   // Retry logic
-  retryWrites: true,
   maxStalenessSeconds: 120,
   
   // Family (IPv4 first)
