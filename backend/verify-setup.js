@@ -75,10 +75,7 @@ const requiredEnvVars = [
 ];
 
 const automatedDeploymentVars = [
-  'WEBHOOK_DEPLOYMENT_MODE',
-  'AWS_EC2_HOST',
-  'AWS_EC2_USER',
-  'AWS_EC2_KEY_PATH'
+  'WEBHOOK_DEPLOYMENT_MODE'
 ];
 
 requiredEnvVars.forEach(envVar => {
@@ -168,7 +165,7 @@ checkStatus(
 console.log('\n☁️  AWS EC2 Configuration');
 console.log('-'.repeat(60));
 
-const ec2Vars = ['AWS_EC2_HOST', 'AWS_EC2_USER', 'AWS_EC2_KEY_PATH'];
+const ec2Vars = [];
 const ec2Configured = ec2Vars.every(v => {
   const val = envContent.split(`${v}=`)[1]?.split('\n')[0]?.trim();
   return val && !val.includes('your-');
@@ -188,15 +185,11 @@ if (ec2Configured) {
 console.log('\n🔐 SSH Key');
 console.log('-'.repeat(60));
 
-const keyPath = envContent.split('AWS_EC2_KEY_PATH=')[1]?.split('\n')[0]?.trim();
-if (keyPath) {
-  checkStatus(
-    fs.existsSync(keyPath),
-    `SSH key exists at ${keyPath}`
-  );
-} else {
-  checkWarning(false, 'SSH key path not configured');
-}
+checkStatus(
+  true,
+  'SSH key generated automatically',
+  'No user PEM file is required'
+);
 
 // 8. Summary
 console.log('\n' + '='.repeat(60));
@@ -219,7 +212,7 @@ if (!ec2Configured) {
   console.log('\n🚀 To Enable Automated Deployment:');
   console.log('   1. Update AWS_EC2_HOST in .env');
   console.log('   2. Set AWS_EC2_USER (usually "ubuntu")');
-  console.log('   3. Set AWS_EC2_KEY_PATH to your SSH key');
+  console.log('   3. Click Deploy with CI/CD to generate an EC2 key pair automatically');
   console.log('   4. Run: npm start');
   console.log('   5. Add GitHub webhooks to your repos');
 }

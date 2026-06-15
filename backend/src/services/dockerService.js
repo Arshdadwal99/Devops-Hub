@@ -1,6 +1,7 @@
 import { exec, execFile } from "child_process";
 import { promisify } from "util";
 import { existsSync } from "fs";
+import os from "os";
 import { Log } from "../models/Logs.js";
 import { ContainerHealth } from "../models/ContainerHealth.js";
 import { Deployment } from "../models/Deployment.js";
@@ -13,46 +14,167 @@ const execFileAsync = promisify(execFile);
 // Docker daemon availability tracking
 let dockerAvailable = null;
 let dockerCheckTime = 0;
+let dockerStatusCache = null;
 const DOCKER_CHECK_INTERVAL = 10000; // 10 seconds
+
+function isRunningInContainer() {
+  return existsSync("/.dockerenv") || existsSync("/run/.containerenv");
+}
+
+function looksLikeEc2() {
+  return Boolean(
+    process.env.EC2_INSTANCE_ID ||
+    process.env.AWS_EC2_INSTANCE_ID ||
+    process.env.AWS_EXECUTION_ENV
+  );
+}
+
+function isMalformedWindowsPipe(value) {
+  return /^https?:\/\/.*%2[fF]%2[fF].*pipe/i.test(value || "");
+}
+
+function shellSingleQuote(value) {
+  return `'${String(value ?? "").replace(/'/g, "'\\''")}'`;
+}
+
+export function getDockerConnectionConfig() {
+  const osPlatform = os.platform();
+  const configuredHost = process.env.DOCKER_HOST || "";
+  const runningInContainer = isRunningInContainer();
+  const runningOnEc2 = looksLikeEc2();
+  const env = { ...process.env };
+
+  let platform = osPlatform;
+  let host = configuredHost;
+  let socketPath = null;
+  let source = configuredHost ? "env" : "default";
+
+  if (osPlatform === "linux") {
+    platform = runningInContainer ? "docker-in-docker" : runningOnEc2 ? "ec2" : "linux";
+    socketPath = "/var/run/docker.sock";
+    host = configuredHost || `unix://${socketPath}`;
+    env.DOCKER_HOST = host;
+    source = configuredHost ? "env" : platform;
+  } else if (osPlatform === "win32") {
+    platform = "windows";
+
+    if (isMalformedWindowsPipe(configuredHost)) {
+      delete env.DOCKER_HOST;
+      host = "npipe:////./pipe/dockerDesktopLinuxEngine";
+      source = "windows-default";
+    } else if (configuredHost) {
+      env.DOCKER_HOST = configuredHost;
+    } else {
+      delete env.DOCKER_HOST;
+      host = "npipe:////./pipe/docker_engine";
+      source = "windows-default";
+    }
+  } else if (!configuredHost) {
+    delete env.DOCKER_HOST;
+    host = "docker-cli-default";
+    source = "cli-default";
+  }
+
+  return {
+    env,
+    host,
+    platform,
+    osPlatform,
+    socketPath,
+    source,
+    runningInContainer,
+    runningOnEc2,
+  };
+}
+
+function getDockerUnavailableMessage(error, connection) {
+  const details = error?.stderr || error?.stdout || error?.message || String(error || "Unknown Docker error");
+
+  if (connection.osPlatform === "linux") {
+    return `Docker daemon unavailable at unix:///var/run/docker.sock. Start Docker or mount /var/run/docker.sock into this container. ${details}`;
+  }
+
+  if (connection.osPlatform === "win32") {
+    return `Docker Desktop daemon unavailable. Start Docker Desktop and ensure the Linux engine is running. ${details}`;
+  }
+
+  return `Docker daemon unavailable. ${details}`;
+}
+
+export async function getDockerStatus({ force = false } = {}) {
+  const now = Date.now();
+
+  if (!force && dockerStatusCache && (now - dockerCheckTime) < DOCKER_CHECK_INTERVAL) {
+    return dockerStatusCache;
+  }
+
+  const connection = getDockerConnectionConfig();
+
+  try {
+    if (connection.socketPath && !existsSync(connection.socketPath)) {
+      throw new Error(`Docker socket not found: ${connection.socketPath}`);
+    }
+
+    const [{ stdout: versionStdout }, { stdout: infoStdout }] = await Promise.race([
+      Promise.all([
+        execFileAsync("docker", ["version", "--format", "{{.Server.Version}}"], { env: connection.env }),
+        execFileAsync("docker", ["info", "--format", "{{json .}}"], {
+          env: connection.env,
+          maxBuffer: 5 * 1024 * 1024,
+        }),
+      ]),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Docker check timeout")), 5000)),
+    ]);
+
+    let info = {};
+    try {
+      info = JSON.parse(infoStdout);
+    } catch (_error) {
+      info = {};
+    }
+
+    dockerAvailable = true;
+    dockerCheckTime = now;
+    dockerStatusCache = {
+      available: true,
+      version: String(versionStdout || info.ServerVersion || "").trim(),
+      platform: connection.platform,
+      host: connection.host,
+      source: connection.source,
+      error: null,
+    };
+
+    console.log("[Docker] Connection successful", {
+      platform: dockerStatusCache.platform,
+      host: dockerStatusCache.host,
+      version: dockerStatusCache.version,
+    });
+
+    return dockerStatusCache;
+  } catch (error) {
+    dockerAvailable = false;
+    dockerCheckTime = now;
+    dockerStatusCache = {
+      available: false,
+      version: null,
+      platform: connection.platform,
+      host: connection.host,
+      source: connection.source,
+      error: getDockerUnavailableMessage(error, connection),
+    };
+
+    console.warn("[Docker] Daemon unavailable", dockerStatusCache.error);
+    return dockerStatusCache;
+  }
+}
 
 /**
  * Check if Docker daemon is available
  * Caches the result to avoid constant checking
  */
 export async function isDockerAvailable() {
-  const now = Date.now();
-  
-  // Use cached result if recent
-  if (dockerAvailable !== null && (now - dockerCheckTime) < DOCKER_CHECK_INTERVAL) {
-    return dockerAvailable;
-  }
-
-  try {
-    // Check if socket file exists
-    const socketPath = process.env.DOCKER_HOST || "/var/run/docker.sock";
-    if (socketPath.startsWith("unix://")) {
-      const path = socketPath.replace("unix://", "");
-      if (!existsSync(path)) {
-        console.warn(`⚠️  [Docker] Socket not found: ${path}`);
-        dockerAvailable = false;
-        dockerCheckTime = now;
-        return false;
-      }
-    }
-
-    // Try a quick docker command
-    await execFileAsync("docker", ["version", "--format={{.Server.Version}}"]);
-    
-    console.log("✅ [Docker] Daemon connected and available");
-    dockerAvailable = true;
-    dockerCheckTime = now;
-    return true;
-  } catch (error) {
-    console.warn("❌ [Docker] Daemon unavailable:", error.message);
-    dockerAvailable = false;
-    dockerCheckTime = now;
-    return false;
-  }
+  const status = await getDockerStatus();
+  return status.available;
 }
 
 /**
@@ -131,8 +253,10 @@ export const getContainers = async () => {
     }
 
     console.log("📦 [Docker] Fetching containers...");
+    const connection = getDockerConnectionConfig();
     const { stdout } = await execAsync(
-      'docker ps --format "{{json .}}" -a'
+      'docker ps --format "{{json .}}" -a',
+      { env: connection.env }
     );
 
     const lines = stdout.trim().split("\n").filter(l => l);
@@ -177,8 +301,10 @@ export const getContainerStats = async (containerId) => {
 
     console.log(`📊 [Docker] Fetching stats for container: ${containerId}`);
     const safeId = escapeShellArg(containerId);
+    const connection = getDockerConnectionConfig();
     const { stdout } = await execAsync(
-      `docker stats ${safeId} --no-stream --format "{{json .}}"`
+      `docker stats ${safeId} --no-stream --format "{{json .}}"`,
+      { env: connection.env }
     );
 
     const stats = JSON.parse(stdout.trim());
@@ -219,10 +345,11 @@ export const buildImage = async (dockerfile, tag, buildContext = ".") => {
     
     console.log(`🔨 [Docker] Building image: ${tag}`);
 
+    const connection = getDockerConnectionConfig();
     const { stdout, stderr } = await execFileAsync(
       "docker",
       ["build", "-f", dockerfile, "-t", safeTag, buildContext],
-      { maxBuffer: 10 * 1024 * 1024 }
+      { env: connection.env, maxBuffer: 10 * 1024 * 1024 }
     );
 
     const logs = (stdout + stderr).split("\n").filter(l => l);
@@ -293,7 +420,8 @@ export const runContainer = async (options) => {
 
     args.push(safeImage);
 
-    const { stdout, stderr } = await execFileAsync("docker", args);
+    const connection = getDockerConnectionConfig();
+    const { stdout, stderr } = await execFileAsync("docker", args, { env: connection.env });
     const containerId = (stdout + stderr).trim().split("\n")[0];
 
     console.log(`✅ [Docker] Container started: ${containerId}`);
@@ -325,7 +453,8 @@ export const stopContainer = async (containerId, timeout = 10) => {
     
     console.log(`⏹️ [Docker] Stopping container: ${containerId}`);
 
-    await execFileAsync("docker", ["stop", "-t", safeTimeout, safeId]);
+    const connection = getDockerConnectionConfig();
+    await execFileAsync("docker", ["stop", "-t", safeTimeout, safeId], { env: connection.env });
 
     console.log(`✅ [Docker] Container stopped: ${containerId}`);
 
@@ -355,7 +484,8 @@ export const removeContainer = async (containerId, force = false) => {
     const args = ["rm"];
     if (force) args.push("-f");
     args.push(safeId);
-    await execFileAsync("docker", args);
+    const connection = getDockerConnectionConfig();
+    await execFileAsync("docker", args, { env: connection.env });
 
     console.log(`✅ [Docker] Container removed: ${containerId}`);
 
@@ -388,7 +518,9 @@ export const getContainerLogs = async (containerId, lines = 50) => {
     const safeId = escapeShellArg(containerId);
     const safeLines = escapeShellArg(String(lines));
     
+    const connection = getDockerConnectionConfig();
     const { stdout } = await execFileAsync("docker", ["logs", "--tail", safeLines, safeId], {
+      env: connection.env,
       maxBuffer: 10 * 1024 * 1024,
     });
 
@@ -440,11 +572,12 @@ export const getContainerHealth = async (containerId) => {
     console.log(`🏥 [Docker] Checking health for container: ${containerId}`);
     const safeId = escapeShellArg(containerId);
     // Use conditional template to handle containers without health checks gracefully
+    const connection = getDockerConnectionConfig();
     const { stdout } = await execFileAsync("docker", [
       "inspect",
       "--format={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}",
       safeId,
-    ]);
+    ], { env: connection.env });
 
     const status = normalizeContainerHealth(stdout);
 
@@ -469,7 +602,9 @@ export const getContainerHealth = async (containerId) => {
 
 export const pruneUnusedImages = async () => {
   try {
+    const connection = getDockerConnectionConfig();
     const { stdout, stderr } = await execFileAsync("docker", ["image", "prune", "-f"], {
+      env: connection.env,
       maxBuffer: 10 * 1024 * 1024,
     });
 
@@ -608,7 +743,8 @@ export const getDockerInfo = async () => {
     }
 
     console.log("🐳 [Docker] Fetching Docker system info...");
-    const { stdout } = await execAsync("docker info --format json");
+    const connection = getDockerConnectionConfig();
+    const { stdout } = await execAsync("docker info --format json", { env: connection.env });
     const info = JSON.parse(stdout);
 
     console.log(`✅ [Docker] System info retrieved: ${info.ContainersRunning} running, ${info.ContainersStopped} stopped`);
@@ -648,7 +784,8 @@ export const restartContainer = async (containerId, timeout = 10) => {
 
     console.log(`🔄 [Docker] Restarting container: ${containerId}`);
 
-    await execAsync(`docker restart -t ${safeTimeout} ${safeId}`);
+    const connection = getDockerConnectionConfig();
+    await execAsync(`docker restart -t ${safeTimeout} ${safeId}`, { env: connection.env });
 
     console.log(`✅ [Docker] Container restarted: ${containerId}`);
 
@@ -705,8 +842,10 @@ export const getAllContainerStats = async () => {
     }
 
     console.log("📊 [Docker] Fetching stats for all containers...");
+    const connection = getDockerConnectionConfig();
     const { stdout } = await execAsync(
-      'docker stats --all --no-stream --format "{{json .}}"'
+      'docker stats --all --no-stream --format "{{json .}}"',
+      { env: connection.env }
     );
 
     const lines = stdout.trim().split("\n").filter(l => l);

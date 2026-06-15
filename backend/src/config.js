@@ -69,9 +69,20 @@ export const config = {
   dockerHost: process.env.DOCKER_HOST || "unix:///var/run/docker.sock",
   dockerVersion: process.env.DOCKER_VERSION || "1.24",
 
-  // GitHub Webhook
+  // Registry credential encryption
+  registryEncryptionKey: process.env.REGISTRY_ENCRYPTION_KEY || process.env.JWT_SECRET || "your-secret-key-change-in-production",
+
+  // GitHub Webhook & OAuth
   githubWebhookSecret: process.env.GITHUB_WEBHOOK_SECRET || "",
   githubToken: process.env.GITHUB_TOKEN || "",
+  githubClientId: process.env.GITHUB_CLIENT_ID || "",
+  githubClientSecret: process.env.GITHUB_CLIENT_SECRET || "",
+  backendUrl: process.env.BACKEND_URL || "http://localhost:5000",
+
+  // Validate GitHub OAuth configuration
+  ...(process.env.NODE_ENV === "production" && {
+    githubOAuthConfigured: !!(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET),
+  }),
 
   // AWS
   awsRegion: process.env.AWS_REGION || "us-east-1",
@@ -80,7 +91,8 @@ export const config = {
   awsEc2InstanceId: process.env.AWS_EC2_INSTANCE_ID || "",
   awsEc2Host: process.env.AWS_EC2_HOST || "",
   awsEc2User: process.env.AWS_EC2_USER || "ubuntu",
-  awsEc2KeyPath: process.env.AWS_EC2_KEY_PATH || "",
+  awsEc2KeyName: process.env.AWS_EC2_KEY_NAME || "",
+  awsEc2Port: process.env.AWS_EC2_PORT || 22,
 
   // OpenAI (for AI log analysis)
   openaiApiKey: process.env.OPENAI_API_KEY || "",

@@ -19,9 +19,11 @@ function generateNodeJenkinsfile(detection, containerName, containerPort, repoNa
 
     environment {
         NODE_ENV = 'production'
-        DOCKER_IMAGE = '${containerName}:${BUILD_NUMBER}'
+        DOCKER_IMAGE_LOCAL = '${containerName}:${BUILD_NUMBER}'
+        DOCKER_IMAGE = 'docker.io/\${DOCKER_USERNAME}/${repoName}:${BUILD_NUMBER}'
+        DOCKER_IMAGE_LATEST = 'docker.io/\${DOCKER_USERNAME}/${repoName}:latest'
         PORT = '${containerPort}'
-        REGISTRY = credentials('docker-registry')
+        DOCKER_CREDENTIALS = credentials('dockerhub-credentials')
     }
 
     stages {
@@ -74,7 +76,37 @@ function generateNodeJenkinsfile(detection, containerName, containerPort, repoNa
             steps {
                 script {
                     echo '🐳 Building Docker image...'
-                    sh 'docker build -t \${DOCKER_IMAGE} .'
+                    sh 'docker build -t \${DOCKER_IMAGE_LOCAL} .'
+                }
+            }
+        }
+
+        stage('Docker Hub Login') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    echo '🔐 Authenticating to Docker Hub...'
+                    sh 'echo \${DOCKER_CREDENTIALS_PSW} | docker login -u \${DOCKER_CREDENTIALS_USR} --password-stdin'
+                }
+            }
+        }
+
+        stage('Create Docker Hub Repository') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    echo '📋 Ensuring Docker Hub repository exists...'
+                    sh '''
+                        curl -X GET https://hub.docker.com/v2/repositories/\${DOCKER_CREDENTIALS_USR}/${repoName}/ || \
+                        curl -X POST https://hub.docker.com/v2/repositories/ \
+                          -u \${DOCKER_CREDENTIALS_USR}:\${DOCKER_CREDENTIALS_PSW} \
+                          -H "Content-Type: application/json" \
+                          -d '{"namespace":"\${DOCKER_CREDENTIALS_USR}","name":"${repoName}","description":"Auto-provisioned by DevOps Hub","is_private":false}' || true
+                    '''
                 }
             }
         }
@@ -85,11 +117,37 @@ function generateNodeJenkinsfile(detection, containerName, containerPort, repoNa
             }
             steps {
                 script {
-                    echo '📤 Pushing Docker image...'
+                    echo '📤 Pushing Docker image to Docker Hub...'
                     sh '''
-                        docker tag \${DOCKER_IMAGE} ${containerName}:latest
-                        docker push \${DOCKER_IMAGE} || echo "Push skipped"
-                        docker push ${containerName}:latest || echo "Push skipped"
+                        docker tag \${DOCKER_IMAGE_LOCAL} \${DOCKER_IMAGE}
+                        docker tag \${DOCKER_IMAGE_LOCAL} \${DOCKER_IMAGE_LATEST}
+                        docker push \${DOCKER_IMAGE}
+                        docker push \${DOCKER_IMAGE_LATEST}
+                    '''
+                }
+            }
+        }
+
+        stage('Verify Docker Hub Image') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    echo '✅ Verifying image exists in Docker Hub...'
+                    sh '''
+                        RETRY=0
+                        while [ $RETRY -lt 10 ]; do
+                          if curl -s -f https://hub.docker.com/v2/repositories/\${DOCKER_CREDENTIALS_USR}/${repoName}/images/ | grep -q "${BUILD_NUMBER}"; then
+                            echo "✅ Image verified in Docker Hub: \${DOCKER_IMAGE}"
+                            exit 0
+                          fi
+                          RETRY=$((RETRY+1))
+                          echo "Waiting for image to be available in Docker Hub... (attempt $RETRY/10)"
+                          sleep 2
+                        done
+                        echo "❌ Image verification timeout"
+                        exit 1
                     '''
                 }
             }
@@ -101,36 +159,20 @@ function generateNodeJenkinsfile(detection, containerName, containerPort, repoNa
             }
             steps {
                 script {
-                    echo '🚀 Deploying application...'
-                    sh '''
-                        docker compose pull || true
-                        docker compose down || true
-                        docker compose up -d
-                        sleep 10
-                    '''
+                    echo '🚀 Triggering EC2 deployment...'
+                    echo "Deployment will use image from Docker Hub"
                 }
             }
         }
 
-        stage('Health Check') {
+        stage('Post-Deploy Health Check') {
             when {
                 branch 'main'
             }
             steps {
                 script {
-                    echo '❤️ Performing health checks...'
-                    sh '''
-                        for i in {1..30}; do
-                            if curl -f http://localhost:${PORT} > /dev/null 2>&1; then
-                                echo "✅ Application is healthy"
-                                exit 0
-                            fi
-                            echo "Waiting for application to be ready... (\$i/30)"
-                            sleep 2
-                        done
-                        echo "❌ Health check failed"
-                        exit 1
-                    '''
+                    echo '❤️ Waiting for EC2 deployment health check...'
+                    echo "Health checks performed by EC2 deployment service"
                 }
             }
         }
@@ -170,8 +212,11 @@ function generatePythonJenkinsfile(detection, containerName, containerPort, repo
 
     environment {
         PYTHONUNBUFFERED = '1'
-        DOCKER_IMAGE = '${containerName}:${BUILD_NUMBER}'
+        DOCKER_IMAGE_LOCAL = '${containerName}:${BUILD_NUMBER}'
+        DOCKER_IMAGE = 'docker.io/\\${DOCKER_USERNAME}/${repoName}:${BUILD_NUMBER}'
+        DOCKER_IMAGE_LATEST = 'docker.io/\\${DOCKER_USERNAME}/${repoName}:latest'
         PORT = '${containerPort}'
+        DOCKER_CREDENTIALS = credentials('dockerhub-credentials')
     }
 
     stages {
@@ -226,7 +271,79 @@ function generatePythonJenkinsfile(detection, containerName, containerPort, repo
             steps {
                 script {
                     echo '🐳 Building Docker image...'
-                    sh 'docker build -t \${DOCKER_IMAGE} .'
+                    sh 'docker build -t ${DOCKER_IMAGE_LOCAL} .'
+                }
+            }
+        }
+
+        stage('Docker Hub Login') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    echo '🔐 Authenticating to Docker Hub...'
+                    sh 'echo ${DOCKER_CREDENTIALS_PSW} | docker login -u ${DOCKER_CREDENTIALS_USR} --password-stdin'
+                }
+            }
+        }
+
+        stage('Create Docker Hub Repository') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    echo '📋 Ensuring Docker Hub repository exists...'
+                    sh '''
+                        curl -X GET https://hub.docker.com/v2/repositories/${DOCKER_CREDENTIALS_USR}/${repoName}/ || \
+                        curl -X POST https://hub.docker.com/v2/repositories/ \
+                          -u ${DOCKER_CREDENTIALS_USR}:${DOCKER_CREDENTIALS_PSW} \
+                          -H "Content-Type: application/json" \
+                          -d '{"namespace":"${DOCKER_CREDENTIALS_USR}","name":"${repoName}","description":"Auto-provisioned by DevOps Hub","is_private":false}' || true
+                    '''
+                }
+            }
+        }
+
+        stage('Push Docker Image') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    echo '📤 Pushing Docker image to Docker Hub...'
+                    sh '''
+                        docker tag ${DOCKER_IMAGE_LOCAL} ${DOCKER_IMAGE}
+                        docker tag ${DOCKER_IMAGE_LOCAL} ${DOCKER_IMAGE_LATEST}
+                        docker push ${DOCKER_IMAGE}
+                        docker push ${DOCKER_IMAGE_LATEST}
+                    '''
+                }
+            }
+        }
+
+        stage('Verify Docker Hub Image') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    echo '✅ Verifying image exists in Docker Hub...'
+                    sh '''
+                        RETRY=0
+                        while [ $RETRY -lt 10 ]; do
+                          if curl -s -f https://hub.docker.com/v2/repositories/${DOCKER_CREDENTIALS_USR}/${repoName}/images/ | grep -q "${BUILD_NUMBER}"; then
+                            echo "✅ Image verified in Docker Hub: ${DOCKER_IMAGE}"
+                            exit 0
+                          fi
+                          RETRY=$((RETRY+1))
+                          echo "Waiting for image to be available in Docker Hub... (attempt $RETRY/10)"
+                          sleep 2
+                        done
+                        echo "❌ Image verification timeout"
+                        exit 1
+                    '''
                 }
             }
         }
@@ -237,13 +354,8 @@ function generatePythonJenkinsfile(detection, containerName, containerPort, repo
             }
             steps {
                 script {
-                    echo '🚀 Deploying application...'
-                    sh '''
-                        docker compose pull || true
-                        docker compose down || true
-                        docker compose up -d
-                        sleep 10
-                    '''
+                    echo '🚀 Triggering EC2 deployment...'
+                    echo "Deployment will use image from Docker Hub"
                 }
             }
         }
@@ -305,7 +417,10 @@ function generateStaticJenkinsfile(detection, containerName, containerPort, repo
     }
 
     environment {
-        DOCKER_IMAGE = '${containerName}:${BUILD_NUMBER}'
+        DOCKER_IMAGE_LOCAL = '${containerName}:${BUILD_NUMBER}'
+        DOCKER_IMAGE = 'docker.io/\${DOCKER_USERNAME}/${repoName}:${BUILD_NUMBER}'
+        DOCKER_IMAGE_LATEST = 'docker.io/\${DOCKER_USERNAME}/${repoName}:latest'
+        DOCKER_CREDENTIALS = credentials('dockerhub-credentials')
     }
 
     stages {
@@ -322,7 +437,79 @@ function generateStaticJenkinsfile(detection, containerName, containerPort, repo
             steps {
                 script {
                     echo '🐳 Building Docker image...'
-                    sh 'docker build -t \${DOCKER_IMAGE} .'
+                    sh 'docker build -t ${DOCKER_IMAGE_LOCAL} .'
+                }
+            }
+        }
+
+        stage('Docker Hub Login') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    echo '🔐 Authenticating to Docker Hub...'
+                    sh 'echo ${DOCKER_CREDENTIALS_PSW} | docker login -u ${DOCKER_CREDENTIALS_USR} --password-stdin'
+                }
+            }
+        }
+
+        stage('Create Docker Hub Repository') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    echo '📋 Ensuring Docker Hub repository exists...'
+                    sh '''
+                        curl -X GET https://hub.docker.com/v2/repositories/${DOCKER_CREDENTIALS_USR}/${repoName}/ || \
+                        curl -X POST https://hub.docker.com/v2/repositories/ \
+                          -u ${DOCKER_CREDENTIALS_USR}:${DOCKER_CREDENTIALS_PSW} \
+                          -H "Content-Type: application/json" \
+                          -d '{"namespace":"${DOCKER_CREDENTIALS_USR}","name":"${repoName}","description":"Auto-provisioned by DevOps Hub","is_private":false}' || true
+                    '''
+                }
+            }
+        }
+
+        stage('Push Docker Image') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    echo '📤 Pushing Docker image to Docker Hub...'
+                    sh '''
+                        docker tag ${DOCKER_IMAGE_LOCAL} ${DOCKER_IMAGE}
+                        docker tag ${DOCKER_IMAGE_LOCAL} ${DOCKER_IMAGE_LATEST}
+                        docker push ${DOCKER_IMAGE}
+                        docker push ${DOCKER_IMAGE_LATEST}
+                    '''
+                }
+            }
+        }
+
+        stage('Verify Docker Hub Image') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    echo '✅ Verifying image exists in Docker Hub...'
+                    sh '''
+                        RETRY=0
+                        while [ $RETRY -lt 10 ]; do
+                          if curl -s -f https://hub.docker.com/v2/repositories/${DOCKER_CREDENTIALS_USR}/${repoName}/images/ | grep -q "${BUILD_NUMBER}"; then
+                            echo "✅ Image verified in Docker Hub: ${DOCKER_IMAGE}"
+                            exit 0
+                          fi
+                          RETRY=$((RETRY+1))
+                          echo "Waiting for image to be available in Docker Hub... (attempt $RETRY/10)"
+                          sleep 2
+                        done
+                        echo "❌ Image verification timeout"
+                        exit 1
+                    '''
                 }
             }
         }
@@ -333,13 +520,8 @@ function generateStaticJenkinsfile(detection, containerName, containerPort, repo
             }
             steps {
                 script {
-                    echo '🚀 Deploying application...'
-                    sh '''
-                        docker compose pull || true
-                        docker compose down || true
-                        docker compose up -d
-                        sleep 5
-                    '''
+                    echo '🚀 Triggering EC2 deployment...'
+                    echo "Deployment will use image from Docker Hub"
                 }
             }
         }

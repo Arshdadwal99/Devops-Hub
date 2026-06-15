@@ -14,6 +14,7 @@ import {
 } from "./dockerService.js";
 import { createAlert } from "./alertService.js";
 import { Log } from "../models/Logs.js";
+import { DockerPortDetectionService } from "./dockerPortDetectionService.js";
 import {
   emitDeploymentStarted,
   emitDeploymentProgress,
@@ -36,7 +37,7 @@ const DEPLOYMENT_CONFIG = {
   DOCKER_REGISTRY_PASSWORD: process.env.DOCKER_REGISTRY_PASSWORD,
   CONTAINER_PORT: process.env.CONTAINER_PORT || "3000",
   HOST_PORT: process.env.HOST_PORT || "3000",
-  DEPLOYMENT_TIMEOUT: parseInt(process.env.DEPLOYMENT_TIMEOUT) || 300000, // 5 minutes
+  DEPLOYMENT_TIMEOUT: parseInt(process.env.DEPLOYMENT_TIMEOUT) || 1800000, // 30 minutes
   POLL_INTERVAL: parseInt(process.env.POLL_INTERVAL) || 5000, // 5 seconds
 };
 
@@ -153,9 +154,59 @@ export const buildDockerImage = async (
 };
 
 /**
+ * Ensure Docker Hub repository exists, create if needed
+ */
+const ensureDockerHubRepositoryExists = async (repositoryName) => {
+  try {
+    if (!repositoryName || !DEPLOYMENT_CONFIG.DOCKER_REGISTRY_USERNAME || !DEPLOYMENT_CONFIG.DOCKER_REGISTRY_PASSWORD) {
+      return { success: true, skipped: true }; // Skip if no repo name or credentials
+    }
+
+    const repoName = repositoryName.toLowerCase().split('/').pop(); // Extract repo name from full path
+    console.log(`🔍 [Docker Hub] Checking if repository exists: ${repoName}`);
+
+    // Check if repository exists (public endpoint)
+    try {
+      const checkResponse = await axios.get(`https://hub.docker.com/v2/repositories/${DEPLOYMENT_CONFIG.DOCKER_REGISTRY_USERNAME}/${repoName}/`, {
+        timeout: 10000,
+      });
+      console.log(`✅ [Docker Hub] Repository already exists: ${repoName}`);
+      return { success: true, exists: true };
+    } catch (checkError) {
+      if (checkError.response?.status !== 404) throw checkError;
+      console.log(`ℹ️  [Docker Hub] Repository not found, creating: ${repoName}`);
+    }
+
+    // Create repository if not found
+    const createResponse = await axios.post(
+      'https://hub.docker.com/v2/repositories/',
+      {
+        namespace: DEPLOYMENT_CONFIG.DOCKER_REGISTRY_USERNAME,
+        name: repoName,
+        description: `Auto-provisioned by DevOps Hub for ${repositoryName}`,
+        is_private: false,
+      },
+      {
+        auth: {
+          username: DEPLOYMENT_CONFIG.DOCKER_REGISTRY_USERNAME,
+          password: DEPLOYMENT_CONFIG.DOCKER_REGISTRY_PASSWORD,
+        },
+        timeout: 10000,
+      }
+    );
+
+    console.log(`✅ [Docker Hub] Repository created successfully: ${repoName}`);
+    return { success: true, created: true };
+  } catch (error) {
+    console.warn(`⚠️  [Docker Hub] Could not ensure repository exists: ${error.message}`);
+    return { success: false, error: error.message }; // Non-blocking, continue with push
+  }
+};
+
+/**
  * Push Docker image to registry (optional)
  */
-export const pushDockerImage = async (imageTag) => {
+export const pushDockerImage = async (imageTag, repositoryName) => {
   try {
     if (!DEPLOYMENT_CONFIG.DOCKER_REGISTRY || DEPLOYMENT_CONFIG.DOCKER_REGISTRY === "localhost") {
       console.log(`ℹ️  Local registry, skipping push for ${imageTag}`);
@@ -164,6 +215,14 @@ export const pushDockerImage = async (imageTag) => {
         skipped: true,
         message: "Local registry, push skipped",
       };
+    }
+
+    // Ensure Docker Hub repository exists (if using Docker Hub)
+    if (DEPLOYMENT_CONFIG.DOCKER_REGISTRY.includes('docker.io')) {
+      const repoResult = await ensureDockerHubRepositoryExists(repositoryName);
+      if (!repoResult.success) {
+        throw new Error(`Failed to ensure Docker Hub repository exists: ${repoResult.error}`);
+      }
     }
 
     console.log(`📤 [Deployment] Pushing Docker image: ${imageTag}`);
@@ -217,12 +276,29 @@ export const performAutomaticDeployment = async (
       imageTag,
       environment = "production",
       userId,
-      ports = [DEPLOYMENT_CONFIG.CONTAINER_PORT],
+      ports = [],
       env = [],
       volumes = [],
     } = containerConfig;
 
     logs.push(`[${new Date().toISOString()}] Starting automatic deployment after Jenkins build #${buildNumber}`);
+
+    // Detect port from image if not provided
+    let finalPorts = ports;
+    let portDetectionMethod = "configured";
+    
+    if (!ports || ports.length === 0) {
+      try {
+        const detectedPort = await DockerPortDetectionService.getValidatedPort(imageTag, 3000);
+        finalPorts = [`${detectedPort}`];
+        portDetectionMethod = "detected";
+        logs.push(`✅ Port detected from image: ${detectedPort}`);
+      } catch (error) {
+        finalPorts = [DEPLOYMENT_CONFIG.CONTAINER_PORT || "3000"];
+        portDetectionMethod = "default";
+        logs.push(`⚠️  Port detection failed, using default: ${finalPorts[0]}`);
+      }
+    }
 
     // Create deployment record
     const deployment = await Deployment.create({
@@ -241,6 +317,8 @@ export const performAutomaticDeployment = async (
           name: containerName,
           image: imageTag,
           status: "pending",
+          ports: finalPorts,
+          portDetectionMethod,
         },
       ],
     });
@@ -300,7 +378,7 @@ export const performAutomaticDeployment = async (
 
     // Step 3: Push image to registry (optional)
     logs.push(`[${new Date().toISOString()}] Step 3: Pushing Docker image to registry...`);
-    const pushResult = await pushDockerImage(imageTag);
+    const pushResult = await pushDockerImage(imageTag, containerConfig.repository);
 
     if (!pushResult.success && !pushResult.skipped) {
       console.warn(`⚠️  Warning: Image push failed, but continuing with local deployment`);
@@ -372,7 +450,7 @@ export const performAutomaticDeployment = async (
       oldContainerId,
       image: imageTag,
       newContainerName,
-      ports,
+      ports: finalPorts,
       env,
       volumes,
       userId,

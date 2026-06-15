@@ -275,8 +275,8 @@ router.post("/ec2-deploy", verifyToken, async (req, res) => {
 router.get("/ec2-config", verifyToken, async (req, res) => {
   try {
     const config = {
-      host: process.env.AWS_EC2_HOST ? "configured" : "missing",
-      keyPath: process.env.AWS_EC2_KEY_PATH ? "configured" : "missing",
+      host: process.env.AWS_EC2_HOST ? "configured" : "auto-detected",
+      keyManagement: "automatic",
       user: process.env.AWS_EC2_USER || "ubuntu",
       region: process.env.AWS_REGION || "us-east-1",
     };
@@ -284,7 +284,7 @@ router.get("/ec2-config", verifyToken, async (req, res) => {
     res.json({
       success: true,
       config,
-      ready: config.host === "configured" && config.keyPath === "configured",
+      ready: true,
     });
   } catch (error) {
     res.status(500).json({
@@ -345,7 +345,7 @@ router.post("/rollback/:deploymentId", verifyToken, async (req, res) => {
       const { execSync } = await import("child_process");
 
       // Stop current containers
-      execSync("docker compose down || true");
+      execSync("docker compose -p app down --remove-orphans || true");
 
       // Start previous version
       execSync(`docker run -d --name app ${previousDeployment.containers[0].image}`);

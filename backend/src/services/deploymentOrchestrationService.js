@@ -109,16 +109,10 @@ class DeploymentOrchestrationService {
       }
       logs.push(`✅ Docker image built: ${imageTag}`);
 
-      // Step 8: Push Docker image to registry (if configured)
-      if (process.env.DOCKER_REGISTRY_URL && process.env.DOCKER_REGISTRY_PASSWORD) {
-        logs.push("📤 Step 8: Pushing Docker image to registry...");
-        const pushResult = await this.pushDockerImage(imageTag);
-        if (pushResult.success) {
-          logs.push("✅ Docker image pushed to registry");
-        } else {
-          logs.push(`⚠️  Warning: Could not push image: ${pushResult.error}`);
-        }
-      }
+      // Step 8: Use Docker Hub registry format for deployment
+      const dockerHubUsername = process.env.DOCKER_REGISTRY_USERNAME || "app";
+      const dockerHubImage = `docker.io/${dockerHubUsername}/${webhookData.repository.name}:${webhookData.repository.id}`;
+      logs.push(`📤 Step 8: Docker image ready for deployment: ${dockerHubImage}`);
 
       // Step 9: Deploy to AWS EC2
       logs.push("🚀 Step 9: Deploying to AWS EC2...");
@@ -126,7 +120,7 @@ class DeploymentOrchestrationService {
         deploymentId,
         containerName,
         containerPort: detection.detection.ports[0],
-        dockerImage: imageTag,
+        dockerImage: dockerHubImage,
         environment: "production",
         repository: webhookData.repository.clone_url,
         commitSha: webhookData.after,
@@ -279,13 +273,63 @@ class DeploymentOrchestrationService {
   }
 
   /**
+   * Ensure Docker Hub repository exists (if using docker.io)
+   */
+  async ensureDockerHubRepositoryExistsOrc(repositoryName) {
+    try {
+      if (!repositoryName || !process.env.DOCKER_REGISTRY_USERNAME || !process.env.DOCKER_REGISTRY_PASSWORD) {
+        return { success: true, skipped: true };
+      }
+      const repoName = repositoryName.toLowerCase().split('/').pop();
+      console.log(`🔍 Checking Docker Hub repository: ${repoName}`);
+      try {
+        await axios.get(`https://hub.docker.com/v2/repositories/${process.env.DOCKER_REGISTRY_USERNAME}/${repoName}/`, { timeout: 10000 });
+        console.log(`✅ Repository exists: ${repoName}`);
+        return { success: true, exists: true };
+      } catch (e) {
+        if (e.response?.status !== 404) throw e;
+        console.log(`Creating Docker Hub repository: ${repoName}`);
+        await axios.post(
+          'https://hub.docker.com/v2/repositories/',
+          {
+            namespace: process.env.DOCKER_REGISTRY_USERNAME,
+            name: repoName,
+            description: `Auto-provisioned by DevOps Hub for ${repositoryName}`,
+            is_private: false,
+          },
+          {
+            auth: {
+              username: process.env.DOCKER_REGISTRY_USERNAME,
+              password: process.env.DOCKER_REGISTRY_PASSWORD,
+            },
+            timeout: 10000,
+          }
+        );
+        console.log(`✅ Repository created: ${repoName}`);
+        return { success: true, created: true };
+      }
+    } catch (error) {
+      console.warn(`⚠️  Could not ensure repository: ${error.message}`);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
    * Push Docker image to registry
    */
-  async pushDockerImage(imageTag) {
+  async pushDockerImage(imageTag, repositoryName) {
     try {
       const registryUrl = process.env.DOCKER_REGISTRY_URL;
       const username = process.env.DOCKER_REGISTRY_USERNAME;
       const password = process.env.DOCKER_REGISTRY_PASSWORD;
+
+      // Ensure Docker Hub repository exists (if using docker.io)
+      if (registryUrl.includes('docker.io')) {
+        const repoResult = await this.ensureDockerHubRepositoryExistsOrc(repositoryName);
+        if (!repoResult.success) {
+          throw new Error(`Failed to ensure Docker Hub repository exists: ${repoResult.error}`);
+        }
+      }
 
       // Login to registry
       await execAsync(`echo ${password} | docker login -u ${username} --password-stdin ${registryUrl}`);

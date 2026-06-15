@@ -78,10 +78,11 @@ export default function Signup() {
       const provider = new GoogleAuthProvider();
       provider.setCustomParameters({ prompt: "select_account" });
       const result = await signInWithPopup(auth, provider);
-      const idToken = await result.user.getIdToken();
+      // IMPORTANT: Force refresh (true parameter) to always get a fresh token immediately after Google auth
+      const idToken = await result.user.getIdToken(true);
       const userName = result.user.displayName || result.user.email?.split("@")[0];
       
-      // Send Firebase token to backend for verification
+      // Send FRESH Firebase token directly to backend - do NOT cache in localStorage
       const response = await firebaseAuth(idToken, userName);
       setAuthLogin(response.user, response.token);
       navigate("/");

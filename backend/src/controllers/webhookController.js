@@ -19,26 +19,27 @@ import {
  */
 export const handleGitHubWebhook = async (req, res, next) => {
   try {
-    console.log("📨 [Webhook] Received GitHub webhook");
+    console.log("GitHub webhook received");
 
     // Get signature and event type from headers
     const signature = req.headers["x-hub-signature-256"];
     const eventType = req.headers["x-github-event"];
     const deliveryId = req.headers["x-github-delivery"];
 
+    console.log("Event:", eventType);
+    console.log("Delivery:", deliveryId);
+
     // GitHub signs the exact raw request body bytes.
     const rawBody = req.rawBody || Buffer.from(JSON.stringify(req.body));
 
     // Verify GitHub signature
     if (!verifyGitHubSignature(rawBody, signature)) {
-      console.warn("❌ Invalid GitHub webhook signature");
       return res.status(401).json({
-        success: false,
         message: "Invalid GitHub webhook signature",
       });
     }
 
-    console.log(`✅ GitHub signature verified. Event: ${eventType}, Delivery: ${deliveryId}`);
+    console.log(`GitHub signature verified. Event: ${eventType}, Delivery: ${deliveryId}`);
 
     // Process based on event type
     let webhookData;
@@ -54,7 +55,7 @@ export const handleGitHubWebhook = async (req, res, next) => {
         webhookData = extractGitHubReleaseData(req.body);
         break;
       default:
-        console.log(`⏭️  Skipping event type: ${eventType}`);
+        console.log(`Skipping event type: ${eventType}`);
         return res.status(200).json({
           success: true,
           message: `Event type '${eventType}' is not processed`,
@@ -66,7 +67,7 @@ export const handleGitHubWebhook = async (req, res, next) => {
 
     res.status(200).json(result);
   } catch (error) {
-    console.error("❌ Error handling GitHub webhook:", error.message);
+    console.error("Error handling GitHub webhook:", error.message);
     next(error);
   }
 };
@@ -84,7 +85,7 @@ export const getWebhooks = async (req, res, next) => {
 
     res.json(result);
   } catch (error) {
-    console.error("❌ Error fetching webhooks:", error.message);
+    console.error("Error fetching webhooks:", error.message);
     next(error);
   }
 };
@@ -101,7 +102,7 @@ export const getWebhook = async (req, res, next) => {
 
     res.json(webhook);
   } catch (error) {
-    console.error("❌ Error fetching webhook:", error.message);
+    console.error("Error fetching webhook:", error.message);
     next(error);
   }
 };
@@ -120,7 +121,7 @@ export const getWebhooksByRepo = async (req, res, next) => {
 
     res.json(result);
   } catch (error) {
-    console.error("❌ Error fetching repository webhooks:", error.message);
+    console.error("Error fetching repository webhooks:", error.message);
     next(error);
   }
 };
@@ -135,7 +136,7 @@ export const getStats = async (req, res, next) => {
 
     res.json(stats);
   } catch (error) {
-    console.error("❌ Error fetching webhook stats:", error.message);
+    console.error("Error fetching webhook stats:", error.message);
     next(error);
   }
 };
@@ -156,7 +157,7 @@ export const removeWebhook = async (req, res, next) => {
       webhook: result,
     });
   } catch (error) {
-    console.error("❌ Error deleting webhook:", error.message);
+    console.error("Error deleting webhook:", error.message);
     next(error);
   }
 };
@@ -165,7 +166,7 @@ export const removeWebhook = async (req, res, next) => {
  * Health check for webhook
  * GET /api/webhooks/health
  */
-export const webhookHealth = async (req, res) => {
+export const webhookHealth = async (_req, res) => {
   res.json({
     status: "ok",
     message: "Webhook service is running",

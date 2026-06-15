@@ -13,7 +13,6 @@ import {
   YAxis,
 } from "recharts";
 import {
-  deployRelease,
   getDashboard,
   getDockerContainers,
   deleteAlert,
@@ -27,9 +26,7 @@ import { subscribeToMetrics, subscribeToAlerts, subscribeToLogs, disconnectSocke
 import LogAnalysisForm from "../components/LogAnalysisForm";
 import JenkinsBuildStatus from "../components/JenkinsBuildStatus";
 import JenkinsBuildHistory from "../components/JenkinsBuildHistory";
-import JenkinsTriggerBuild from "../components/JenkinsTriggerBuild";
 import JenkinsStatistics from "../components/JenkinsStatistics";
-import GitHubAutoDeploy from "../components/GitHubAutoDeploy";
 
 const stats = [
   { key: "cpu", label: "CPU Usage", suffix: "%" },
@@ -39,7 +36,6 @@ const stats = [
 ];
 
 const actionMap = {
-  deploy: deployRelease,
   rollback: rollbackRelease,
   restart: restartServices,
 };
@@ -63,6 +59,39 @@ function StatusPill({ value }) {
     <span className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.25em] ${tone}`}>
       {formatStatus(value)}
     </span>
+  );
+}
+
+function normalizeLogList(logs) {
+  return Array.isArray(logs) ? logs : [];
+}
+
+function getLogText(entry) {
+  if (entry == null) return "";
+  if (typeof entry !== "object") return String(entry);
+  return entry.message || entry.error || JSON.stringify(entry);
+}
+
+function LogEntry({ entry, variant = "deployment" }) {
+  const isObject = entry && typeof entry === "object";
+  const borderClass = variant === "error" ? "border-red-300/10 bg-red-500/5" : "border-white/5 bg-white/5";
+
+  if (!isObject) {
+    return (
+      <div className={`rounded-2xl border p-3 ${borderClass}`}>
+        {getLogText(entry)}
+      </div>
+    );
+  }
+
+  return (
+    <div className={`rounded-2xl border p-3 ${borderClass}`}>
+      <div className="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-slate-500">
+        {entry.level && <span>{entry.level}</span>}
+        {entry.timestamp && <span>{new Date(entry.timestamp).toLocaleString()}</span>}
+      </div>
+      <div className="mt-2 whitespace-pre-wrap text-slate-300">{getLogText(entry)}</div>
+    </div>
   );
 }
 
@@ -388,6 +417,18 @@ function Dashboard() {
                     type="button"
                     onClick={() => {
                       setMenuOpen(false);
+                      navigate("/integrations");
+                    }}
+                    className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-sm text-slate-300 transition hover:bg-slate-800/50"
+                  >
+                    <span className="text-base">🔗</span>
+                    <span className="font-medium">Integrations</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMenuOpen(false);
                       setShowSettings(true);
                     }}
                     className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-sm text-slate-300 transition hover:bg-slate-800/50"
@@ -461,13 +502,13 @@ function Dashboard() {
               </div>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-2">
               <button
                 type="button"
-                onClick={() => handleAction("deploy")}
+                onClick={() => navigate("/github/repositories")}
                 className="rounded-2xl bg-aurora px-5 py-3 text-sm font-semibold text-slate-950 transition hover:scale-[1.02]"
               >
-                Deploy Now
+                Setup CI/CD
               </button>
               <button
                 type="button"
@@ -580,6 +621,33 @@ function Dashboard() {
             </div>
           </div>
 
+          <div className="mt-6 rounded-3xl border border-white/10 bg-slate-950/35 p-5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm text-slate-400">Workflow stages</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  {dashboard?.pipeline?.generatedWorkflow?.path || ".github/workflows/deploy.yml"}
+                </p>
+              </div>
+              {dashboard?.pipeline?.generatedWorkflow?.projectType && (
+                <span className="rounded-full border border-aurora/20 bg-aurora/10 px-3 py-1 text-xs font-semibold text-aurora">
+                  {dashboard.pipeline.generatedWorkflow.projectType}
+                </span>
+              )}
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              {(dashboard?.pipeline?.stages || [{ name: "Automated CI/CD setup", status: "pending" }]).map((stage) => (
+                <div
+                  key={stage.name}
+                  className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-slate-900/50 px-4 py-3"
+                >
+                  <span className="text-sm font-medium text-slate-200">{stage.name}</span>
+                  <StatusPill value={stage.status || "pending"} />
+                </div>
+              ))}
+            </div>
+          </div>
+
           <div className="mt-6 h-72 rounded-3xl border border-white/10 bg-slate-950/35 p-4">
             <div className="mb-4 flex items-center justify-between">
               <div>
@@ -659,7 +727,7 @@ function Dashboard() {
                 <p className="mt-2 text-2xl font-semibold">{dashboard?.controlPanel?.previousVersion || 'N/A'}</p>
               </div>
               <div className="rounded-3xl border border-white/10 bg-slate-950/35 p-4">
-                <p className="text-sm text-slate-400">Last Deploy</p>
+                <p className="text-sm text-slate-400">Last Auto Deploy</p>
                 <p className="mt-2 text-base font-semibold">
                   {dashboard?.controlPanel?.lastDeploymentAt 
                     ? new Date(dashboard.controlPanel.lastDeploymentAt).toLocaleString()
@@ -667,8 +735,25 @@ function Dashboard() {
                 </p>
               </div>
             </div>
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <div className="rounded-3xl border border-white/10 bg-slate-950/35 p-4">
+                <p className="text-sm text-slate-400">Auto Deploy</p>
+                <p className={`mt-2 text-base font-semibold ${dashboard?.deployment?.autoDeployEnabled ? "text-emerald-200" : "text-slate-300"}`}>
+                  {dashboard?.deployment?.autoDeployEnabled ? "Auto Deploy Enabled ✅" : "Disabled"}
+                </p>
+              </div>
+              <div className="rounded-3xl border border-white/10 bg-slate-950/35 p-4">
+                <p className="text-sm text-slate-400">Deployment Status</p>
+                <p className="mt-2 text-base font-semibold">
+                  {dashboard?.deployment?.autoDeployStatus || dashboard?.deployment?.status || "unknown"}
+                </p>
+              </div>
+            </div>
             <div className="mt-4 rounded-3xl border border-aurora/20 bg-aurora/8 p-4 text-sm text-slate-200">
-              {dashboard?.controlPanel?.nextRecommendation || 'No recommendations at this time'}
+              <div className="font-semibold">Latest Deployment</div>
+              <div className="mt-1">
+                {dashboard?.deployment?.lastDeployment?.version || dashboard?.controlPanel?.nextRecommendation || 'No deployments yet'}
+              </div>
             </div>
           </motion.article>
 
@@ -727,11 +812,9 @@ function Dashboard() {
             <div className="rounded-3xl border border-white/10 bg-slate-950/40 p-4">
               <p className="mb-3 text-sm font-semibold text-aurora">Deployment Logs</p>
               <div className="space-y-3 font-mono text-xs text-slate-300">
-                {dashboard?.logs?.deployment && dashboard.logs.deployment.length > 0 ? (
-                  dashboard.logs.deployment.map((entry, idx) => (
-                    <div key={idx} className="rounded-2xl border border-white/5 bg-white/5 p-3">
-                      {entry}
-                    </div>
+                {normalizeLogList(dashboard?.logs?.deployment).length > 0 ? (
+                  normalizeLogList(dashboard?.logs?.deployment).map((entry, idx) => (
+                    <LogEntry key={entry?._id || idx} entry={entry} />
                   ))
                 ) : (
                   <div className="rounded-2xl border border-white/5 bg-white/5 p-3 text-slate-500">
@@ -743,11 +826,9 @@ function Dashboard() {
             <div className="rounded-3xl border border-white/10 bg-slate-950/40 p-4">
               <p className="mb-3 text-sm font-semibold text-red-200">Error Logs</p>
               <div className="space-y-3 font-mono text-xs text-slate-300">
-                {dashboard?.logs?.errorLogs && dashboard.logs.errorLogs.length > 0 ? (
-                  dashboard.logs.errorLogs.map((entry, idx) => (
-                    <div key={idx} className="rounded-2xl border border-red-300/10 bg-red-500/5 p-3">
-                      {entry}
-                    </div>
+                {normalizeLogList(dashboard?.logs?.errorLogs).length > 0 ? (
+                  normalizeLogList(dashboard?.logs?.errorLogs).map((entry, idx) => (
+                    <LogEntry key={entry?._id || idx} entry={entry} variant="error" />
                   ))
                 ) : (
                   <div className="rounded-2xl border border-red-300/10 bg-red-500/5 p-3 text-slate-500">
@@ -867,17 +948,22 @@ function Dashboard() {
           transition={{ delay: 0.5 }}
         >
           <div className="glass-panel rounded-[28px] p-6">
-            <GitHubAutoDeploy onDeployed={() => setLastUpdated(new Date())} />
-          </div>
-        </motion.div>
-
-        <motion.div
-          initial={{ opacity: 0, y: 18 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.55 }}
-        >
-          <div className="glass-panel rounded-[28px] p-6">
-            <JenkinsTriggerBuild />
+            <p className="text-sm uppercase tracking-[0.3em] text-slate-400">
+              One-Click Deployment
+            </p>
+            <h2 className="mt-2 font-display text-2xl font-bold">
+              Deploy from GitHub
+            </h2>
+            <p className="mt-2 max-w-2xl text-sm text-slate-400">
+              Choose a repository and DevOps Hub will generate files, configure CI/CD, create the Jenkins job, wire the webhook, and trigger deployment automatically.
+            </p>
+            <button
+              type="button"
+              onClick={() => navigate("/github/repositories")}
+              className="mt-5 rounded-2xl bg-aurora px-5 py-3 text-sm font-semibold text-slate-950 transition hover:scale-[1.01]"
+            >
+              Open repositories
+            </button>
           </div>
         </motion.div>
 

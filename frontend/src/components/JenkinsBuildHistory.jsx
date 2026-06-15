@@ -1,6 +1,17 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import axios from 'axios';
+import { axiosInstance } from '../lib/api';
 import { useAuth } from '../lib/AuthContext';
+
+function formatLogEntry(entry) {
+  if (entry == null) return "";
+  if (typeof entry !== "object") return String(entry);
+
+  const parts = [];
+  if (entry.timestamp) parts.push(new Date(entry.timestamp).toLocaleString());
+  if (entry.level) parts.push(String(entry.level).toUpperCase());
+  parts.push(entry.message || entry.error || JSON.stringify(entry));
+  return parts.filter(Boolean).join(" | ");
+}
 
 export const JenkinsBuildHistory = ({ limit = 10 }) => {
   const [builds, setBuilds] = useState([]);
@@ -14,8 +25,7 @@ export const JenkinsBuildHistory = ({ limit = 10 }) => {
   const fetchBuildHistory = useCallback(async () => {
     try {
       setLoading(true);
-      const config = token ? { headers: { Authorization: `Bearer ${token}` } } : {};
-      const response = await axios.get(`/api/jenkins/history?limit=${limit}`, config);
+      const response = await axiosInstance.get(`/jenkins/history?limit=${limit}`);
       setBuilds(response.data.builds || []);
       setError(null);
     } catch (err) {
@@ -24,7 +34,7 @@ export const JenkinsBuildHistory = ({ limit = 10 }) => {
     } finally {
       setLoading(false);
     }
-  }, [limit, token]);
+  }, [limit]);
 
   useEffect(() => {
     fetchBuildHistory();
@@ -32,8 +42,7 @@ export const JenkinsBuildHistory = ({ limit = 10 }) => {
 
   const fetchBuildDetails = async (buildNumber) => {
     try {
-      const config = token ? { headers: { Authorization: `Bearer ${token}` } } : {};
-      const response = await axios.get(`/api/jenkins/builds/${buildNumber}`, config);
+      const response = await axiosInstance.get(`/jenkins/builds/${buildNumber}`);
       setBuildDetails(response.data);
       setSelectedBuild(buildNumber);
     } catch (err) {
@@ -43,13 +52,18 @@ export const JenkinsBuildHistory = ({ limit = 10 }) => {
 
   const fetchBuildLogs = async (buildNumber) => {
     try {
-      const config = token ? { headers: { Authorization: `Bearer ${token}` } } : {};
-      const response = await axios.get(`/api/jenkins/builds/${buildNumber}/logs`, config);
+      const response = await axiosInstance.get(`/jenkins/builds/${buildNumber}/logs`);
       setLogs(response.data);
     } catch (err) {
       console.error('Failed to fetch logs:', err);
     }
   };
+
+  const buildLogText = Array.isArray(logs?.logs)
+    ? logs.logs.map(formatLogEntry).join('\n')
+    : typeof logs?.logs === "string"
+      ? logs.logs
+      : 'No logs available';
 
   const getStatusBadge = (status) => {
     const colors = {
@@ -192,7 +206,7 @@ export const JenkinsBuildHistory = ({ limit = 10 }) => {
             </button>
           </div>
           <pre className="bg-gray-900 text-green-400 p-4 rounded overflow-auto max-h-64 text-sm">
-            {logs.logs?.join('\n') || 'No logs available'}
+            {buildLogText}
           </pre>
         </div>
       )}

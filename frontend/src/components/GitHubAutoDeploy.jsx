@@ -44,7 +44,7 @@ export default function GitHubAutoDeploy({ onDeployed }) {
     <div>
       <div className="mb-5">
         <p className="text-sm uppercase tracking-[0.3em] text-slate-400">Automatic Pipeline</p>
-        <h2 className="mt-2 font-display text-2xl font-bold text-slate-100">GitHub to Docker</h2>
+        <h2 className="mt-2 font-display text-2xl font-bold text-slate-100">GitHub Actions Auto Deploy</h2>
       </div>
 
       <form onSubmit={handleSubmit} className="grid gap-4 lg:grid-cols-2">
@@ -122,7 +122,7 @@ export default function GitHubAutoDeploy({ onDeployed }) {
             disabled={loading}
             className="w-full rounded-2xl bg-aurora px-5 py-3 text-sm font-semibold text-slate-950 transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {loading ? "Building Pipeline..." : "Build and Deploy"}
+            {loading ? "Generating Pipeline..." : "Generate CI/CD Pipeline"}
           </button>
         </div>
       </form>
@@ -135,9 +135,7 @@ export default function GitHubAutoDeploy({ onDeployed }) {
 
       {result?.success && (
         <div className="mt-4 rounded-2xl border border-emerald-300/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100">
-          {result.deploymentMode === "compose"
-            ? `Deployed Docker Compose project ${result.containerName}`
-            : `Deployed ${result.imageTag} as ${result.containerName}`}
+          CI/CD pipeline configured. Future GitHub pushes will trigger deployment automatically.
         </div>
       )}
     </div>

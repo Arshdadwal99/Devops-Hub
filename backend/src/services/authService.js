@@ -314,10 +314,10 @@ export const firebaseAuthService = async (firebaseIdToken, authType = "login", u
     }
     
     if (error.message && error.message.includes("Firebase token")) {
-      throw new Error("Invalid Firebase authentication token");
+      throw new Error(error.message);
     }
     
-    if (error.message && error.message.includes("MongoDB") || error.message.includes("connection")) {
+    if (error.message && (error.message.includes("MongoDB") || error.message.includes("connection"))) {
       throw new Error("Database unavailable. Please try again later.");
     }
     

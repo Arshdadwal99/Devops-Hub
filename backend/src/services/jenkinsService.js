@@ -15,14 +15,53 @@ const JENKINS_TOKEN = process.env.JENKINS_TOKEN || "";
 const JENKINS_JOB_NAME = process.env.JENKINS_JOB_NAME || "devops-hub-deploy";
 const JENKINS_AUTO_CREATE_JOB = process.env.JENKINS_AUTO_CREATE_JOB !== "false";
 
+function normalizeJenkinsBaseUrl(url) {
+  return String(url || "").trim().replace(/\/+$/, "");
+}
+
+function buildJenkinsEndpoint(path, params = {}) {
+  const cleanBase = normalizeJenkinsBaseUrl(JENKINS_URL);
+  const cleanPath = String(path || "").replace(/^\/+/, "");
+  const url = new URL(`${cleanBase}/${cleanPath}`);
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) {
+      url.searchParams.set(key, String(value));
+    }
+  });
+
+  return url.toString();
+}
+
+function responseBodyToString(data) {
+  if (data === undefined || data === null) return "";
+  if (typeof data === "string") return data;
+  try {
+    return JSON.stringify(data);
+  } catch (_error) {
+    return String(data);
+  }
+}
+
+function logJenkinsRequest({ endpoint, jobName, response, responseBody }) {
+  console.log(
+    `[JENKINS]\n` +
+      `Base URL: ${normalizeJenkinsBaseUrl(JENKINS_URL)}\n` +
+      `Endpoint: ${endpoint || ""}\n` +
+      `Job Name: ${jobName || ""}\n` +
+      `Response Code: ${response?.status ?? ""}\n` +
+      `Response Body: ${responseBodyToString(responseBody !== undefined ? responseBody : response?.data)}`
+  );
+}
+
 // Jenkins availability tracking
 let jenkinsAvailable = null;
 let jenkinsCheckTime = 0;
 const JENKINS_CHECK_INTERVAL = 30000; // 30 seconds
 const JENKINS_RETRY_CONFIG = {
-  maxRetries: 3,
-  retryDelays: [1000, 3000, 5000], // Exponential backoff: 1s, 3s, 5s
-  timeout: 8000, // 8 seconds - quick timeout to prevent frontend timeouts
+  maxRetries: 2,
+  retryDelays: [500, 1500], // Faster backoff: 0.5s, 1.5s
+  timeout: 4000, // 4 seconds - quick timeout to prevent frontend timeouts
 };
 
 // Response caching to avoid repeated slow requests
@@ -415,13 +454,25 @@ async function ensureGenericPipelineJob(client) {
 
     console.log(`ðŸ§± [Jenkins] Creating generic pipeline job: ${JENKINS_JOB_NAME}`);
     const crumbHeaders = await getJenkinsCrumbHeaders(client);
-    await client.post("/createItem", createGenericPipelineConfigXml(), {
-      params: { name: JENKINS_JOB_NAME },
-      headers: {
-        ...crumbHeaders,
-        "Content-Type": "application/xml",
-      },
-    });
+    const endpoint = buildJenkinsEndpoint("/createItem", { name: JENKINS_JOB_NAME });
+    try {
+      const response = await client.post("/createItem", createGenericPipelineConfigXml(), {
+        params: { name: JENKINS_JOB_NAME },
+        headers: {
+          ...crumbHeaders,
+          "Content-Type": "application/xml",
+        },
+      });
+      logJenkinsRequest({ endpoint, jobName: JENKINS_JOB_NAME, response });
+    } catch (createError) {
+      logJenkinsRequest({
+        endpoint,
+        jobName: JENKINS_JOB_NAME,
+        response: createError.response,
+        responseBody: createError.response?.data,
+      });
+      throw createError;
+    }
   }
 }
 

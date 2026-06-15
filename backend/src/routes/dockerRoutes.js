@@ -8,6 +8,7 @@ import {
   getHealthHistory,
   getLogs,
   getInfo,
+  getStatus,
   restartContainerHandler,
   stopContainerHandler,
   removeContainerHandler,
@@ -83,6 +84,12 @@ router.post("/containers/:containerId/remove", removeContainerHandler);
  * Get Docker system information
  */
 router.get("/info", getInfo);
+
+/**
+ * GET /api/docker/status
+ * Check Docker daemon connectivity
+ */
+router.get("/status", getStatus);
 
 /**
  * Deployment Management APIs

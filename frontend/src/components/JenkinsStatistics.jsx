@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import axios from 'axios';
+import { axiosInstance } from '../lib/api';
 import { useAuth } from '../lib/AuthContext';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
@@ -29,8 +29,7 @@ export const JenkinsStatistics = ({ days = 30 }) => {
   const fetchStatistics = useCallback(async () => {
     try {
       setLoading(true);
-      const config = token ? { headers: { Authorization: `Bearer ${token}` } } : {};
-      const response = await axios.get(`/api/jenkins/statistics?days=${days}`, config);
+      const response = await axiosInstance.get(`/jenkins/statistics?days=${days}`);
       
       // Transform data for charts
       if (response.data.stats) {
@@ -48,7 +47,7 @@ export const JenkinsStatistics = ({ days = 30 }) => {
     } finally {
       setLoading(false);
     }
-  }, [days, generateChartData, token]);
+  }, [days, generateChartData]);
 
   useEffect(() => {
     fetchStatistics();

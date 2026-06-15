@@ -15,6 +15,7 @@ import {
   getDeploymentStats,
   getContainerHealthHistory,
   recordContainerHealth,
+  getDockerStatus,
 } from "../services/dockerService.js";
 
 /**
@@ -225,6 +226,37 @@ export const getInfo = async (req, res) => {
     res.status(500).json({
       success: false,
       error: error.message,
+    });
+  }
+};
+
+/**
+ * GET /api/docker/status
+ * Validate Docker daemon connectivity and report selected platform/host.
+ */
+export const getStatus = async (_req, res) => {
+  try {
+    console.log("[GET] /api/docker/status");
+    const status = await getDockerStatus({ force: true });
+
+    res.status(200).json({
+      success: true,
+      available: status.available,
+      version: status.version,
+      platform: status.platform,
+      host: status.host,
+      error: status.error,
+      timestamp: new Date(),
+    });
+  } catch (error) {
+    console.error("[Docker] Status check failed:", error.message);
+    res.status(200).json({
+      success: true,
+      available: false,
+      version: null,
+      platform: "unknown",
+      error: error.message,
+      timestamp: new Date(),
     });
   }
 };

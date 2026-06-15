@@ -11,6 +11,10 @@
     "lint": "node -e \"console.log('Backend lint not configured')\""
   },
   "dependencies": {
+    "@aws-sdk/client-ec2": "^3.1057.0",
+    "@aws-sdk/client-iam": "^3.1057.0",
+    "@aws-sdk/client-ssm": "^3.1057.0",
+    "@aws-sdk/client-sts": "^3.1057.0",
     "axios": "^1.16.0",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.9.0",
@@ -28,6 +32,7 @@
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
     "socket.io": "^4.8.3",
+    "ssh2": "^1.16.0",
     "systeminformation": "^5.31.5"
   }
 }

@@ -1,0 +1,2 @@
+npm warn "0.0.0.0" is being parsed as a normal command line argument.
+npm warn Unknown cli config "--host". This will stop working in the next major version of npm.

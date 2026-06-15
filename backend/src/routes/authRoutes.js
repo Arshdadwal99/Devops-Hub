@@ -10,6 +10,20 @@ import { verifyToken } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
+// Auth endpoints info
+router.get("/", (_req, res) => {
+  res.json({
+    message: "Auth API endpoints available",
+    endpoints: {
+      signup: "POST /api/auth/signup",
+      login: "POST /api/auth/login",
+      me: "GET /api/auth/me (requires token)",
+      google: "POST /api/auth/google",
+      firebase: "POST /api/auth/firebase"
+    }
+  });
+});
+
 // Signup route
 router.post("/signup", async (req, res, next) => {
   try {
@@ -101,6 +115,15 @@ router.post("/firebase", async (req, res, next) => {
     res.json(result);
   } catch (error) {
     console.error("❌ [Firebase Auth] Error:", error.message);
+    
+    // Handle expired Firebase ID token
+    if (error.code === 'auth/id-token-expired' || error.message?.includes('auth/id-token-expired')) {
+      return res.status(401).json({
+        success: false,
+        message: "Session expired. Please sign in again."
+      });
+    }
+    
     next(error);
   }
 });

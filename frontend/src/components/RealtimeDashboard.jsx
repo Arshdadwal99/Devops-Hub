@@ -1,6 +1,12 @@
 import React, { useEffect, useState } from "react";
 import { useSocketContext } from "../lib/SocketContext";
 
+function formatLogMessage(log) {
+  if (log == null) return "";
+  if (typeof log !== "object") return String(log);
+  return log.message || log.error || JSON.stringify(log);
+}
+
 /**
  * Real-time Dashboard Component
  * Displays live updates from Socket.io
@@ -8,6 +14,7 @@ import { useSocketContext } from "../lib/SocketContext";
 export const RealtimeDashboard = () => {
   const socket = useSocketContext();
   const [activeTab, setActiveTab] = useState("pipeline");
+  const liveLogs = Array.isArray(socket?.data?.logs) ? socket.data.logs : [];
 
   useEffect(() => {
     if (!socket?.isConnected) return;
@@ -199,17 +206,23 @@ export const RealtimeDashboard = () => {
         {activeTab === "logs" && (
           <div className="space-y-4">
             <h3 className="text-lg font-semibold mb-4">
-              Recent Logs ({socket.data?.logs?.length || 0})
+              Recent Logs ({liveLogs.length})
             </h3>
-            {socket.data?.logs && socket.data.logs.length > 0 ? (
+            {liveLogs.length > 0 ? (
               <div className="bg-gray-900 text-green-400 p-4 rounded font-mono text-sm max-h-96 overflow-auto">
-                {socket.data.logs.map((log, idx) => (
+                {liveLogs.map((log, idx) => {
+                  const isObject = log && typeof log === "object";
+                  const timestamp = isObject && log.timestamp ? log.timestamp : Date.now();
+                  const level = isObject ? log.level : "";
+
+                  return (
                   <div key={idx} className="py-1">
-                    <span className="text-gray-500">{new Date(log.timestamp).toLocaleTimeString()}</span>
+                    <span className="text-gray-500">{new Date(timestamp).toLocaleTimeString()}</span>
                     {" "} | {" "}
-                    <span className={log.level === "error" ? "text-red-400" : ""}>{log.message}</span>
+                    <span className={level === "error" ? "text-red-400" : ""}>{formatLogMessage(log)}</span>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <p className="text-gray-500">No logs available</p>

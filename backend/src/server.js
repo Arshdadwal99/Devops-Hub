@@ -26,11 +26,20 @@ import dockerRoutes from "./routes/dockerRoutes.js";
 import logRoutes from "./routes/logRoutes.js";
 import compatibilityRoutes from "./routes/compatibilityRoutes.js";
 import automationRoutes from "./routes/automationRoutes.js";
+import usersRoutes from "./routes/usersRoutes.js";
+import projectsRoutes from "./routes/projectsRoutes.js";
+import githubRoutes from "./routes/githubRoutes.js";
+import repositoriesRoutes from "./routes/repositoriesRoutes.js";
+import cicdRoutes from "./routes/cicdRoutes.js";
+import registryRoutes from "./routes/registryRoutes.js";
+import awsRoutes from "./routes/awsRoutes.js";
+import workflowRoutes from "./routes/workflowRoutes.js";
 import { verifyAuthToken, verifyToken } from "./middleware/authMiddleware.js";
 import { handleGitHubWebhook } from "./controllers/webhookController.js";
 import { getSystemMetrics, clearMetricsCache } from "./services/metricsService.js";
 import { generateMetricAlerts } from "./services/alertService.js";
 import { initializeSocketEvents } from "./services/socketEventsService.js";
+import { validateEc2SshStartupConfig } from "./services/ec2SshKeyService.js";
 
 const app = express();
 const server = http.createServer(app);
@@ -43,6 +52,7 @@ const io = new SocketIOServer(server, {
 
 // Initialize Socket.io events service
 initializeSocketEvents(io);
+validateEc2SshStartupConfig();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -72,6 +82,22 @@ app.use(
   })
 );
 
+app.use((req, res, next) => {
+  res.on("finish", () => {
+    const matchedRoute = req.route?.path
+      ? `${req.baseUrl || ""}${req.route.path}`
+      : "unmatched";
+
+    console.log("[Route Trace]", {
+      requestedUrl: `${req.method} ${req.originalUrl}`,
+      matchedRoute,
+      responseStatus: res.statusCode,
+    });
+  });
+
+  next();
+});
+
 // Debug middleware
 app.use((req, res, next) => {
   console.log(`📨 [${req.method}] ${req.path}`, { bodyKeys: req.body ? Object.keys(req.body) : 'no body' });
@@ -83,7 +109,43 @@ app.get("/api/health", (_req, res) => {
   res.json({ 
     ok: true, 
     message: "Server is running",
-    dbConnected: isDbConnected()
+    dbConnected: isDbConnected(),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// Deployment API health check
+app.get("/api/deployment/health", (_req, res) => {
+  res.json({ 
+    status: "ok",
+    service: "deployment",
+    ready: true,
+    dbConnected: isDbConnected(),
+    endpoints: {
+      validate: "POST /api/deployment/one-click-validate",
+      deploy: "POST /api/deployment/one-click-deploy",
+      status: "GET /api/deployment/status/:id",
+      progress: "GET /api/deployment/:deploymentId/progress",
+    },
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// API root endpoint
+app.get("/api", (_req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "API is running",
+    version: "1.0.0",
+    endpoints: {
+      health: "/api/health",
+      auth: "/api/auth",
+      dashboard: "/api/dashboard",
+      metrics: "/api/metrics",
+      deployments: "/api/deployments",
+      users: "/api/users",
+      projects: "/api/projects"
+    }
   });
 });
 
@@ -92,11 +154,41 @@ app.post("/api/test", (req, res) => {
   res.json({ ok: true, message: "Backend is responding", body: req.body });
 });
 
-// Public routes
+// Public routes (no auth required)
 app.use("/api/auth", authRoutes);
 app.use("/api/webhooks", webhookRoutes);
 app.post("/api/webhook", handleGitHubWebhook);
 app.post("/webhook", handleGitHubWebhook);
+
+// Public deployment API health endpoints (no auth required)
+app.get("/api/deployment/health", (_req, res) => {
+  res.json({ 
+    status: "ok",
+    service: "deployment",
+    ready: true,
+    dbConnected: isDbConnected(),
+    endpoints: {
+      validate: "POST /api/deployment/one-click-validate (requires auth)",
+      deploy: "POST /api/deployment/one-click-deploy (requires auth)",
+      status: "GET /api/deployment/status/:id (requires auth)",
+      progress: "GET /api/deployment/:deploymentId/progress (requires auth)",
+      health: "GET /api/deployment/health (public)",
+    },
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.post("/api/deployment/test", (_req, res) => {
+  res.json({
+    success: true,
+    message: "Deployment test endpoint is working",
+    dbConnected: isDbConnected(),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// GitHub integration routes (requires auth)
+app.use("/api/github", githubRoutes);
 
 // Middleware to log database availability for monitoring (non-blocking)
 app.use((req, res, next) => {
@@ -104,12 +196,17 @@ app.use((req, res, next) => {
   const dbDependentPaths = [
     "/api/dashboard",
     "/api/metrics",
+    "/api/deployment",
     "/api/deployments",
     "/api/alerts",
     "/api/monitoring",
     "/api/analyze",
     "/api/logs",
     "/api/automation",
+    "/api/cicd",
+    "/api/registry",
+    "/api/ec2",
+    "/api/workflow",
   ];
 
   const needsDb = dbDependentPaths.some(path => req.path.startsWith(path));
@@ -127,16 +224,31 @@ app.use((req, res, next) => {
 // Protected routes
 app.use("/api/dashboard", verifyToken, dashboardRoutes);
 app.use("/api/metrics", verifyToken, metricsRoutes);
+console.log("✅ [Routes] Deployment routes mounting...");
+// Note: Deployment routes include both public endpoints (/health, /test) and protected endpoints
+// Auth middleware applies to the whole /api/deployment path
+app.use("/api/deployment", verifyToken, deploymentRoutes);
+console.log("✅ [Routes] Deployment routes registered on /api/deployment");
 app.use("/api/deployments", verifyToken, deploymentRoutes);
+console.log("✅ [Routes] Deployment routes also registered on /api/deployments (alias)");
 app.use("/api/alerts", verifyToken, alertRoutes);
 app.use("/api/monitoring", verifyToken, monitoringRoutes);
 app.use("/api/analyze", verifyToken, analyzeRoutes);
 app.use("/api/logs", verifyToken, logRoutes);
 app.use("/api/automation", verifyToken, automationRoutes);
+app.use("/api/users", verifyToken, usersRoutes);
+app.use("/api/projects", verifyToken, projectsRoutes);
+app.use("/api/repositories", verifyToken, repositoriesRoutes);
+app.use("/api/cicd", verifyToken, cicdRoutes);
+app.use("/api/registry", registryRoutes);
+app.use("/api/aws", awsRoutes);
 app.use("/api/jenkins", jenkinsRoutes);
 app.use("/api/docker", dockerRoutes);
+app.use("/api/workflow", verifyToken, workflowRoutes);
+
+// Compatibility routes - MUST be registered AFTER all specific routes
+// This catches any remaining /api endpoints that need forwarding
 app.use("/api", compatibilityRoutes);
-app.use("/", compatibilityRoutes);
 
 // Socket.io real-time updates
 io.use((socket, next) => {
@@ -173,6 +285,13 @@ io.on("connection", (socket) => {
   socket.on("subscribe:pipeline", () => {
     socket.join("pipeline");
     console.log(`🔄 Client subscribed to pipeline`);
+  });
+
+  // Subscribe to Docker build logs for one prepared deployment
+  socket.on("subscribe:build", (deploymentId) => {
+    if (!deploymentId) return;
+    socket.join(`build:${deploymentId}`);
+    console.log(`🐳 Client subscribed to build logs: ${deploymentId}`);
   });
 
   // Subscribe to logs
@@ -242,14 +361,15 @@ if (existsSync(frontendIndexPath)) {
     etag: false,
   }));
 
-  // Serve frontend for all non-API routes (SPA fallback)
-  app.get("*", (req, res, next) => {
-    // Skip API and webhook routes - let them be handled by error handlers
-    if (req.path.startsWith("/api") || req.path.startsWith("/webhook")) {
+  // SPA fallback - catch all routes not matching static files or API
+  // This middleware runs after static files, so if a file exists it's already served
+  app.use((req, res, next) => {
+    // If it's an API or webhook request, skip to next middleware
+    if (req.path.startsWith('/api') || req.path.startsWith('/webhook')) {
       return next();
     }
-
-    // Serve index.html for all other routes (SPA routing)
+    
+    // For all other requests, serve index.html (SPA routing)
     res.sendFile(frontendIndexPath, (err) => {
       if (err) {
         console.error(`❌ Error serving frontend file ${frontendIndexPath}:`, err.message);
@@ -364,6 +484,17 @@ async function startServer() {
     console.log("🚀 [Server] Starting backend server...");
     console.log(`📍 [Server] Environment: ${config.nodeEnv}`);
     
+    // Validate GitHub token for repository write operations
+    if (!config.githubToken) {
+      console.warn("⚠️  [CRITICAL] GitHub Personal Access Token (GITHUB_TOKEN) is not configured.");
+      console.warn("⚠️  [CRITICAL] Jenkins pipeline generation and repository write operations will FAIL.");
+      console.warn("⚠️  [CRITICAL] Set process.env.GITHUB_TOKEN with a PAT that has 'repo' scope.");
+    } else {
+      console.log("✅ [GitHub] Personal Access Token (GITHUB_TOKEN) is configured");
+      console.log("✅ [GitHub] Token length:", config.githubToken.length);
+      console.log("✅ [GitHub] Token prefix:", config.githubToken.substring(0, 4) + "...");
+    }
+    
     // Try to connect to MongoDB
     console.log("🔄 [Server] Attempting MongoDB connection...");
     try {
@@ -407,6 +538,11 @@ async function startServer() {
       console.log(`🚀 Docker/EC2: Accessible on all network interfaces on port ${PORT}`);
       console.log(`🔌 Socket.io: ws://0.0.0.0:${PORT}`);
       
+      console.log("Registered Deployment Routes:");
+      console.log("- POST /api/deployment/one-click-validate");
+      console.log("- POST /api/deployment/start");
+      console.log("- GET  /api/deployment/status/:id");
+
       if (existsSync(frontendDistPath)) {
         console.log(`✅ Frontend: Serving static files from ${frontendDistPath}`);
         console.log(`🖥️  Web UI: http://localhost:${PORT} (local)`);

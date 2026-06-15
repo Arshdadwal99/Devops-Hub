@@ -238,3 +238,84 @@ export async function retryHealthCheck(containerName, port, maxRetries = 5, init
     attempts: maxRetries,
   };
 }
+
+/**
+ * Check health of deployed EC2 application
+ */
+export async function checkDeployedApplicationHealth(applicationUrl, timeout = 5000) {
+  try {
+    if (!applicationUrl) {
+      return {
+        success: false,
+        status: "no_url",
+        isLive: false,
+        message: "No application URL provided",
+      };
+    }
+
+    try {
+      const response = await axios.get(applicationUrl, {
+        timeout,
+        validateStatus: () => true, // Accept any status code
+      });
+
+      const isHealthy = response.status >= 200 && response.status < 300;
+      
+      return {
+        success: true,
+        status: isHealthy ? "healthy" : "unhealthy",
+        isLive: isHealthy,
+        httpStatus: response.status,
+        message: isHealthy ? "Application is live" : `Application returned HTTP ${response.status}`,
+        responseTime: response.duration || null,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        status: "unhealthy",
+        isLive: false,
+        message: `Health check failed: ${error.message}`,
+        error: error.message,
+      };
+    }
+  } catch (error) {
+    return {
+      success: false,
+      status: "error",
+      isLive: false,
+      message: `Error checking application health: ${error.message}`,
+      error: error.message,
+    };
+  }
+}
+
+/**
+ * Get deployment health status
+ */
+export async function getDeploymentHealthStatus(deployment) {
+  if (!deployment) {
+    return {
+      success: false,
+      status: "unknown",
+      isLive: false,
+      message: "Deployment not found",
+    };
+  }
+
+  const applicationUrl = deployment.applicationUrl || 
+    (deployment.deploymentEndpoint?.publicIp 
+      ? `http://${deployment.deploymentEndpoint.publicIp}:${deployment.deploymentEndpoint.containerPort || 3000}`
+      : null);
+
+  if (!applicationUrl) {
+    return {
+      success: false,
+      status: "unknown",
+      isLive: false,
+      message: "No application URL available",
+    };
+  }
+
+  return await checkDeployedApplicationHealth(applicationUrl);
+}
+

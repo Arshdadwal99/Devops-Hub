@@ -1,0 +1,23 @@
+node:internal/child_process:421
+    throw new ErrnoException(err, 'spawn');
+          ^
+
+Error: spawn EPERM
+    at ChildProcess.spawn (node:internal/child_process:421:11)
+    at spawn (node:child_process:796:9)
+    at start (node:internal/main/watch_mode:98:11)
+    at init (node:internal/main/watch_mode:178:15)
+    at node:internal/main/watch_mode:190:1 {
+  errno: -4048,
+  code: 'EPERM',
+  syscall: 'spawn'
+}
+
+Node.js v24.14.1
+npm error Lifecycle script `dev` failed with error:
+npm error code 1
+npm error path C:\Users\Arsh dadwal\Desktop\devops dashboard\backend
+npm error workspace backend@1.0.0
+npm error location C:\Users\Arsh dadwal\Desktop\devops dashboard\backend
+npm error command failed
+npm error command C:\WINDOWS\system32\cmd.exe /d /s /c node --watch src/server.js

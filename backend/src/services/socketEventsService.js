@@ -374,6 +374,128 @@ export const emitPipelineStatusUpdate = (pipelineData) => {
 };
 
 /**
+ * ===== DOCKER BUILD EVENTS =====
+ */
+
+export const emitDockerBuildStarted = (buildData) => {
+  if (!io) return;
+
+  const eventData = {
+    buildId: buildData.buildId,
+    deploymentId: buildData.deploymentId,
+    imageTag: buildData.imageTag,
+    status: "BUILDING",
+    timestamp: new Date(),
+  };
+
+  io.to(`build:${buildData.deploymentId}`).emit("build:started", eventData);
+  io.to("pipeline").emit("build:started", eventData);
+};
+
+export const emitDockerBuildLog = (buildData) => {
+  if (!io) return;
+
+  const eventData = {
+    buildId: buildData.buildId,
+    deploymentId: buildData.deploymentId,
+    message: buildData.message,
+    timestamp: new Date(),
+  };
+
+  io.to(`build:${buildData.deploymentId}`).emit("build:log", eventData);
+  io.to("logs").emit("log:new", {
+    source: "docker-build",
+    level: "info",
+    message: buildData.message,
+    timestamp: eventData.timestamp,
+  });
+};
+
+export const emitDockerBuildCompleted = (buildData) => {
+  if (!io) return;
+
+  const eventData = {
+    buildId: buildData.buildId,
+    deploymentId: buildData.deploymentId,
+    imageTag: buildData.imageTag,
+    status: buildData.status,
+    duration: buildData.duration,
+    error: buildData.error,
+    timestamp: new Date(),
+  };
+
+  io.to(`build:${buildData.deploymentId}`).emit("build:completed", eventData);
+  io.to("pipeline").emit("build:completed", eventData);
+};
+
+/**
+ * ===== DOCKER PUSH EVENTS =====
+ */
+
+/**
+ * Emit when Docker push starts
+ */
+export const emitDockerPushStarted = (pushData) => {
+  if (!io) return;
+
+  const eventData = {
+    imageId: pushData.imageId,
+    buildId: pushData.buildId,
+    sourceImageTag: pushData.sourceImageTag,
+    targetImageTag: pushData.targetImageTag,
+    status: "PUSHING",
+    timestamp: new Date(),
+  };
+
+  io.to(`push:${pushData.buildId}`).emit("push:started", eventData);
+  io.to("pipeline").emit("push:started", eventData);
+};
+
+/**
+ * Emit Docker push log messages in real-time
+ */
+export const emitDockerPushLog = (pushData) => {
+  if (!io) return;
+
+  const eventData = {
+    imageId: pushData.imageId,
+    buildId: pushData.buildId,
+    message: pushData.message,
+    level: pushData.level || "info",
+    timestamp: new Date(),
+  };
+
+  io.to(`push:${pushData.buildId}`).emit("push:log", eventData);
+  io.to("logs").emit("log:new", {
+    source: "docker-push",
+    level: pushData.level || "info",
+    message: pushData.message,
+    timestamp: eventData.timestamp,
+  });
+};
+
+/**
+ * Emit when Docker push completes
+ */
+export const emitDockerPushCompleted = (pushData) => {
+  if (!io) return;
+
+  const eventData = {
+    imageId: pushData.imageId,
+    buildId: pushData.buildId,
+    targetImageTag: pushData.targetImageTag,
+    status: pushData.status,
+    duration: pushData.duration,
+    error: pushData.error,
+    dockerHubUrl: pushData.dockerHubUrl,
+    timestamp: new Date(),
+  };
+
+  io.to(`push:${pushData.buildId}`).emit("push:completed", eventData);
+  io.to("pipeline").emit("push:completed", eventData);
+};
+
+/**
  * ===== WEBHOOK EVENTS =====
  */
 
@@ -460,6 +582,13 @@ export default {
   emitContainerStatsUpdate,
   // Pipeline events
   emitPipelineStatusUpdate,
+  emitDockerBuildStarted,
+  emitDockerBuildLog,
+  emitDockerBuildCompleted,
+  // Docker push events
+  emitDockerPushStarted,
+  emitDockerPushLog,
+  emitDockerPushCompleted,
   // Webhook events
   emitWebhookReceived,
   // Broadcast events

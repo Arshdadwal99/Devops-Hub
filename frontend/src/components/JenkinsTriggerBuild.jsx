@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import axios from 'axios';
+import { axiosInstance } from '../lib/api';
 import { useAuth } from '../lib/AuthContext';
 
 export const JenkinsTriggerBuild = ({ onBuildTriggered }) => {
@@ -19,7 +19,6 @@ export const JenkinsTriggerBuild = ({ onBuildTriggered }) => {
     setSuccess(null);
 
     try {
-      const config = { headers: { Authorization: `Bearer ${token}` } };
       const payload = {
         repository: { name: repository },
         commit: {
@@ -31,7 +30,7 @@ export const JenkinsTriggerBuild = ({ onBuildTriggered }) => {
         environment,
       };
 
-      const response = await axios.post('/api/jenkins/trigger', payload, config);
+      const response = await axiosInstance.post('/jenkins/trigger', payload);
 
       if (response.data.success || response.data.buildNumber) {
         setSuccess(`✅ Build #${response.data.buildNumber} triggered successfully!`);

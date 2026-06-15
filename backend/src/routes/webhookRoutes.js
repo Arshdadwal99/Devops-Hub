@@ -14,6 +14,11 @@ const router = express.Router();
 
 // Public webhook endpoint (GitHub sends webhooks without auth)
 router.post("/github", handleGitHubWebhook);
+router.get("/github", (_req, res) => {
+  res.status(405).json({
+    message: "Method Not Allowed",
+  });
+});
 
 // Health check (public)
 router.get("/health", webhookHealth);

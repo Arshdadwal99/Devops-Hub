@@ -12,7 +12,7 @@ export const verifyGitHubSignature = (payload, signature) => {
   }
 
   if (!signature) {
-    console.warn("⚠️  No GitHub signature provided");
+    console.warn("No GitHub signature provided");
     return false;
   }
 
@@ -20,29 +20,35 @@ export const verifyGitHubSignature = (payload, signature) => {
     // GitHub sends signature as: sha256=hash
     const [algorithm, hash] = signature.split("=");
 
-    if (algorithm !== "sha256") {
-      console.warn(`⚠️  Invalid signature algorithm: ${algorithm}`);
+    if (algorithm !== "sha256" || !hash) {
+      console.warn(`Invalid signature algorithm: ${algorithm}`);
       return false;
     }
 
-    // Calculate HMAC
-    const hmac = crypto
+    const expectedSignature = crypto
       .createHmac("sha256", GITHUB_WEBHOOK_SECRET)
       .update(payload)
       .digest("hex");
 
-    // Compare signatures using timing-safe comparison
-    const isValid = crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(hmac));
+    const received = Buffer.from(hash, "hex");
+    const expected = Buffer.from(expectedSignature, "hex");
+
+    if (received.length !== expected.length) {
+      console.warn("GitHub webhook signature invalid");
+      return false;
+    }
+
+    const isValid = crypto.timingSafeEqual(received, expected);
 
     if (isValid) {
-      console.log("✅ GitHub webhook signature verified");
+      console.log("GitHub webhook signature verified");
     } else {
-      console.warn("⚠️  GitHub webhook signature invalid");
+      console.warn("GitHub webhook signature invalid");
     }
 
     return isValid;
   } catch (error) {
-    console.error("❌ Error verifying signature:", error.message);
+    console.error("Error verifying signature:", error.message);
     return false;
   }
 };
@@ -87,7 +93,7 @@ export const extractGitHubPushData = (payload) => {
       commitCount: commits.length,
     };
   } catch (error) {
-    console.error("❌ Error extracting GitHub data:", error.message);
+    console.error("Error extracting GitHub data:", error.message);
     throw new Error("Failed to extract GitHub push data");
   }
 };
@@ -125,7 +131,7 @@ export const extractGitHubPullRequestData = (payload) => {
       prNumber: pr.number,
     };
   } catch (error) {
-    console.error("❌ Error extracting GitHub PR data:", error.message);
+    console.error("Error extracting GitHub PR data:", error.message);
     throw new Error("Failed to extract GitHub PR data");
   }
 };
@@ -161,7 +167,7 @@ export const extractGitHubReleaseData = (payload) => {
       action: payload.action,
     };
   } catch (error) {
-    console.error("❌ Error extracting GitHub release data:", error.message);
+    console.error("Error extracting GitHub release data:", error.message);
     throw new Error("Failed to extract GitHub release data");
   }
 };

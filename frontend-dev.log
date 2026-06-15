@@ -1,0 +1,16 @@
+
+> devops-dashboard@1.0.0 dev:frontend
+> npm --workspace frontend run dev --host 0.0.0.0
+
+
+> frontend@1.0.0 dev
+> vite 0.0.0.0
+
+1:32:35 am [vite] (client) Re-optimizing dependencies because vite config has changed
+Port 5173 is in use, trying another one...
+Port 5174 is in use, trying another one...
+
+  VITE v7.3.2  ready in 276 ms
+
+  ➜  Local:   http://localhost:5175/
+  ➜  Network: use --host to expose

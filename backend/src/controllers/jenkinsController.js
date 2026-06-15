@@ -1,5 +1,27 @@
 import * as jenkinsService from "../services/jenkinsService.js";
 import * as deploymentTrackingService from "../services/deploymentTrackingService.js";
+import {
+  connectJenkins,
+  disconnectJenkins,
+  getJenkinsStatus,
+  testSavedJenkinsConnection,
+  validateJenkinsConnection,
+} from "../services/jenkinsConnectionService.js";
+import {
+  generateJenkinsPipeline,
+  previewJenkinsPipeline,
+} from "../services/jenkinsPipelineGeneratorService.js";
+import {
+  createJenkinsJob,
+  deleteJenkinsJob,
+  getJenkinsJob,
+  listJenkinsJobs,
+  recreateJenkinsJob,
+} from "../services/jenkinsJobService.js";
+
+function getUserId(req) {
+  return req.user?.userId || req.user?.uid || req.user?.id || "system";
+}
 
 /**
  * Helper function to add timeout to async operations
@@ -12,6 +34,246 @@ function withTimeout(promise, timeoutMs, operationName = "Operation") {
     )
   ]);
 }
+
+export const connectJenkinsHandler = async (req, res) => {
+  try {
+    const result = await connectJenkins(getUserId(req), {
+      url: req.body?.url,
+      username: req.body?.username,
+      apiToken: req.body?.apiToken,
+    });
+
+    res.status(result.success ? 200 : 400).json(result);
+  } catch (error) {
+    console.error("[Jenkins] Connect failed:", error.message);
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+export const getJenkinsStatusHandler = async (req, res) => {
+  try {
+    const result = await getJenkinsStatus(getUserId(req));
+    res.json(result);
+  } catch (error) {
+    console.error("[Jenkins] Status failed:", error.message);
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+export const disconnectJenkinsHandler = async (req, res) => {
+  try {
+    const result = await disconnectJenkins(getUserId(req));
+    res.json(result);
+  } catch (error) {
+    console.error("[Jenkins] Disconnect failed:", error.message);
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+export const testJenkinsHandler = async (req, res) => {
+  try {
+    const hasInlineCredentials = req.body?.url || req.body?.username || req.body?.apiToken;
+    const result = hasInlineCredentials
+      ? await validateJenkinsConnection({
+          url: req.body?.url,
+          username: req.body?.username,
+          apiToken: req.body?.apiToken,
+        })
+      : await testSavedJenkinsConnection(getUserId(req));
+
+    res.status(result.success ? 200 : 400).json(result);
+  } catch (error) {
+    console.error("[Jenkins] Test failed:", error.message);
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+function validateRepositoryInput(req, res) {
+  console.log('\n=== JENKINS CONTROLLER INPUT VALIDATION ===');
+  console.log('[JENKINS_INPUT] Raw request body:', {
+    owner: req.body?.owner,
+    repo: req.body?.repo,
+    branch: req.body?.branch,
+    hasJenkinsfile: !!req.body?.jenkinsfile,
+  });
+
+  const { owner, repo } = req.body;
+
+  if (!owner || typeof owner !== "string") {
+    console.error('[JENKINS_INPUT] ❌ Validation failed: owner is required');
+    res.status(400).json({ success: false, message: "owner is required" });
+    return false;
+  }
+
+  if (!repo || typeof repo !== "string") {
+    console.error('[JENKINS_INPUT] ❌ Validation failed: repo is required');
+    res.status(400).json({ success: false, message: "repo is required" });
+    return false;
+  }
+
+  const trimmedOwner = String(owner).trim();
+  const trimmedRepo = String(repo).trim();
+
+  console.log('[JENKINS_INPUT] ✅ Validation passed:', {
+    owner: trimmedOwner,
+    repo: trimmedRepo,
+    branch: req.body?.branch || "main",
+  });
+
+  return true;
+}
+
+export const previewJenkinsPipelineHandler = async (req, res) => {
+  try {
+    if (!validateRepositoryInput(req, res)) return;
+
+    const result = await previewJenkinsPipeline(getUserId(req), {
+      owner: req.body.owner.trim(),
+      repo: req.body.repo.trim(),
+      branch: req.body.branch || "main",
+      dockerHubCredentialsId: req.body.dockerHubCredentialsId,
+      ec2SshCredentialsId: req.body.ec2SshCredentialsId,
+    });
+
+    res.json(result);
+  } catch (error) {
+    console.error("[Jenkins] Pipeline preview failed:", error.message);
+    res.status(400).json({
+      success: false,
+      message: error.response?.data?.message || error.message,
+    });
+  }
+};
+
+export const generateJenkinsPipelineHandler = async (req, res) => {
+  try {
+    if (!validateRepositoryInput(req, res)) return;
+
+    const owner = req.body.owner.trim();
+    const repo = req.body.repo.trim();
+    const branch = req.body.branch || "main";
+    const repositoryUrl = req.body.repositoryUrl;
+
+    console.log('\n========================================');
+    console.log('=== GENERATE PIPELINE HANDLER START ===');
+    console.log('========================================');
+    console.log('[JENKINS_HANDLER] Calling generateJenkinsPipeline with:', {
+      owner,
+      repo,
+      branch,
+      repositoryUrl,
+      hasJenkinsfile: !!req.body.jenkinsfile,
+    });
+
+    const result = await generateJenkinsPipeline(getUserId(req), {
+      owner,
+      repo,
+      branch,
+      repositoryUrl,
+      jenkinsfile: req.body.jenkinsfile,
+      dockerHubCredentialsId: req.body.dockerHubCredentialsId,
+      ec2SshCredentialsId: req.body.ec2SshCredentialsId,
+    });
+
+    console.log('[JENKINS_HANDLER] ✅ Pipeline generation successful');
+    res.json(result);
+  } catch (error) {
+    console.error("\n=== JENKINS HANDLER ERROR ===");
+    console.error('[Jenkins] Pipeline generation failed:', {
+      message: error.message,
+      status: error.response?.status,
+      responseData: error.response?.data,
+      details: error.details,
+    });
+
+    // Return detailed error to frontend
+    const errorResponse = {
+      success: false,
+      message: error.message,
+      error: {
+        type: error.response?.status === 404 ? 'GITHUB_NOT_FOUND' : 'PIPELINE_GENERATION_FAILED',
+        statusCode: error.response?.status,
+        details: error.details || {
+          owner: req.body?.owner,
+          repo: req.body?.repo,
+          branch: req.body?.branch,
+          repositoryUrl: req.body?.repositoryUrl,
+        },
+        githubResponse: error.response?.data,
+      },
+    };
+
+    res.status(error.response?.status || 400).json(errorResponse);
+  }
+};
+
+export const createJenkinsJobHandler = async (req, res) => {
+  try {
+    const result = await createJenkinsJob(getUserId(req), {
+      jobName: req.body?.jobName,
+      owner: req.body?.owner,
+      repo: req.body?.repo,
+      repositoryUrl: req.body?.repositoryUrl,
+      branch: req.body?.branch || "main",
+      jenkinsfilePath: req.body?.jenkinsfilePath || "Jenkinsfile",
+    });
+
+    res.status(result.duplicate ? 200 : 201).json(result);
+  } catch (error) {
+    console.error("[Jenkins] Job creation failed:", error.message);
+    res.status(400).json({
+      success: false,
+      message: error.response?.data?.message || error.message,
+      jenkins: error.jenkins,
+    });
+  }
+};
+
+export const listJenkinsJobsHandler = async (req, res) => {
+  try {
+    const result = await listJenkinsJobs(getUserId(req));
+    res.json(result);
+  } catch (error) {
+    console.error("[Jenkins] Job list failed:", error.message);
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+export const getJenkinsJobHandler = async (req, res) => {
+  try {
+    const result = await getJenkinsJob(getUserId(req), req.params.id);
+    res.json(result);
+  } catch (error) {
+    console.error("[Jenkins] Job detail failed:", error.message);
+    res.status(404).json({ success: false, message: error.message });
+  }
+};
+
+export const deleteJenkinsJobHandler = async (req, res) => {
+  try {
+    const result = await deleteJenkinsJob(getUserId(req), req.params.id);
+    res.json(result);
+  } catch (error) {
+    console.error("[Jenkins] Job deletion failed:", error.message);
+    res.status(400).json({
+      success: false,
+      message: error.response?.data?.message || error.message,
+    });
+  }
+};
+
+export const recreateJenkinsJobHandler = async (req, res) => {
+  try {
+    const result = await recreateJenkinsJob(getUserId(req), req.params.id);
+    res.status(201).json(result);
+  } catch (error) {
+    console.error("[Jenkins] Job recreate failed:", error.message);
+    res.status(400).json({
+      success: false,
+      message: error.response?.data?.message || error.message,
+    });
+  }
+};
 
 /**
  * Trigger a new Jenkins build

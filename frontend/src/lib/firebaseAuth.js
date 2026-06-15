@@ -13,13 +13,32 @@ setPersistence(auth, browserLocalPersistence).catch(err => {
   console.warn("Persistence error:", err.message);
 });
 
+onAuthStateChanged(auth, async (user) => {
+  if (!user) {
+    localStorage.removeItem("firebaseToken");
+    return;
+  }
+
+  // NOTE: Do NOT cache Firebase tokens in localStorage
+  // Fresh tokens must be generated immediately after each auth action (Google login, email login)
+  // Tokens in localStorage will inevitably expire if user closes/reopens browser
+  // The backend must verify tokens from the CURRENT request only, never cached tokens
+  try {
+    // Just verify the token can be refreshed, but don't cache it
+    await user.getIdToken(true);
+  } catch (error) {
+    console.warn("Firebase token refresh failed:", error.message);
+    localStorage.removeItem("firebaseToken");
+  }
+});
+
 /**
  * Sign up with email and password
  */
 export const firebaseSignup = async (email, password) => {
   try {
     const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-    const idToken = await userCredential.user.getIdToken();
+    const idToken = await userCredential.user.getIdToken(true);
     return {
       uid: userCredential.user.uid,
       email: userCredential.user.email,
@@ -36,7 +55,7 @@ export const firebaseSignup = async (email, password) => {
 export const firebaseLogin = async (email, password) => {
   try {
     const userCredential = await signInWithEmailAndPassword(auth, email, password);
-    const idToken = await userCredential.user.getIdToken();
+    const idToken = await userCredential.user.getIdToken(true);
     return {
       uid: userCredential.user.uid,
       email: userCredential.user.email,

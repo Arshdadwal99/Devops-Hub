@@ -304,6 +304,7 @@ function AlertsPanel({ alerts }) {
  */
 function LogsViewer({ logs }) {
   const [expandedLogs, setExpandedLogs] = useState(false);
+  const safeLogs = Array.isArray(logs) ? logs : [];
 
   return (
     <motion.div
@@ -326,19 +327,25 @@ function LogsViewer({ logs }) {
           expandedLogs ? "max-h-96" : "max-h-48"
         }`}
       >
-        {logs.slice(0, expandedLogs ? logs.length : 10).map((log, idx) => (
+        {safeLogs.slice(0, expandedLogs ? safeLogs.length : 10).map((log, idx) => {
+          const isObject = log && typeof log === "object";
+          const message = isObject ? log.message || JSON.stringify(log) : String(log);
+          const type = isObject ? log.type || log.level : "";
+
+          return (
           <div
             key={idx}
-            className={`${log.type === "error" ? "text-red-400" : "text-gray-300"}`}
+            className={`${type === "error" ? "text-red-400" : "text-gray-300"}`}
           >
-            <span className="text-gray-500">[{idx + 1}]</span> {log.message}
+            <span className="text-gray-500">[{idx + 1}]</span> {message}
           </div>
-        ))}
+          );
+        })}
       </div>
 
       <p className="text-xs text-gray-500 mt-2">
-        Showing {Math.min(expandedLogs ? logs.length : 10, logs.length)} of{" "}
-        {logs.length} logs
+        Showing {Math.min(expandedLogs ? safeLogs.length : 10, safeLogs.length)} of{" "}
+        {safeLogs.length} logs
       </p>
     </motion.div>
   );

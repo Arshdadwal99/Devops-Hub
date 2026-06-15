@@ -232,17 +232,30 @@ async function deployWithDockerCompose() {
 async function deployWithDocker() {
   log.section('Deploying with Docker');
 
-  const containerName = process.env.CONTAINER_NAME || 'devops-hub-app';
-  const port = process.env.PORT || '5000';
+  const containerName = 'to-do-list';
+  const publicPort = process.env.PUBLIC_PORT || '80';
 
-  log.step(`Stopping old container: ${containerName}`);
-  await command(`docker stop ${containerName} || true`);
-  await command(`docker rm ${containerName} || true`);
+  log.step('Running idempotent cleanup before docker pull/run');
+  await command('docker rm -f to-do-list 2>/dev/null || true');
+  await command('docker ps -aq --filter "name=to-do-list" | xargs -r docker rm -f');
+  await command(`sudo fuser -k ${publicPort}/tcp 2>/dev/null || true`);
+  await command('docker container prune -f || true');
+  await command('docker network prune -f || true');
+  await command('sleep 5');
 
-  log.step(`Starting new container...`);
-  await command(
-    `docker run -d --restart unless-stopped --name ${containerName} -p ${port}:5000 -e NODE_ENV=production ${config.dockerImage}`
+  log.step(`Pulling image: ${config.dockerImage}`);
+  await command(`docker pull ${config.dockerImage}`);
+
+  log.step('Detecting exposed container port');
+  const inspectResult = await command(
+    `docker image inspect ${config.dockerImage} --format='{{range $p, $conf := .Config.ExposedPorts}}{{$p}}{{end}}'`
   );
+  const exposedPort = (inspectResult.stdout || '').trim().split('/')[0] || '3000';
+
+  log.step(`Starting new container on ${publicPort}:${exposedPort}`);
+  await command(`docker run -d --restart unless-stopped --name ${containerName} -p ${publicPort}:${exposedPort} -e NODE_ENV=production ${config.dockerImage}`);
+  await command('docker ps');
+  await command(`curl -f http://localhost:${publicPort}`);
 
   log.success(`Container deployed: ${containerName}`);
 }
@@ -250,7 +263,7 @@ async function deployWithDocker() {
 async function healthCheck() {
   log.section('Health Checks');
 
-  const backendUrl = process.env.BACKEND_URL || 'http://localhost:5000';
+  const backendUrl = process.env.BACKEND_URL || 'http://localhost';
 
   log.step(`Checking backend health: ${backendUrl}/api/health`);
 
@@ -289,9 +302,9 @@ async function printSummary() {
   console.log(chalk.cyan('═'.repeat(50)) + '\n');
 
   console.log(chalk.white('Services:'));
-  console.log(chalk.cyan('  Frontend: http://localhost:3000'));
-  console.log(chalk.cyan('  Backend:  http://localhost:5000'));
-  console.log(chalk.cyan('  Docs:     http://localhost:5000/api-docs'));
+  console.log(chalk.cyan(`  Frontend: ${process.env.FRONTEND_URL || 'set FRONTEND_URL'}`));
+  console.log(chalk.cyan(`  Backend:  ${process.env.BACKEND_URL || 'http://localhost'}`));
+  console.log(chalk.cyan(`  Docs:     ${(process.env.BACKEND_URL || 'http://localhost')}/api-docs`));
 
   console.log('\nDocumentation:');
   console.log(chalk.cyan('  Setup Guide: CICD_PRODUCTION_SETUP.md'));

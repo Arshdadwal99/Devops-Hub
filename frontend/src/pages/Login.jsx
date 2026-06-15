@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { signInWithPopup, GoogleAuthProvider } from "firebase/auth";
+import { signInWithPopup, GoogleAuthProvider, signOut } from "firebase/auth";
 import { auth } from "../lib/firebaseConfig";
 import { firebaseLogin, firebaseLogout } from "../lib/firebaseAuth";
-import { googleAuth, firebaseAuth } from "../lib/api";
+import { firebaseAuth } from "../lib/api";
 import { useAuth } from "../lib/AuthContext";
 
 export default function Login() {
@@ -19,6 +19,12 @@ export default function Login() {
     // Check if Firebase is properly configured
     if (auth && auth.app?.options?.apiKey && !auth.app.options.apiKey.includes("Dummy")) {
       setFirebaseReady(true);
+    }
+
+    const authError = sessionStorage.getItem("authError");
+    if (authError) {
+      setError(authError);
+      sessionStorage.removeItem("authError");
     }
   }, []);
 
@@ -48,13 +54,23 @@ export default function Login() {
   const handleGoogleSignIn = async () => {
     setLoading(true);
     setError("");
+    
+    // Check if Firebase is properly configured
+    if (!firebaseReady) {
+      setError("Firebase is not properly configured. Please use email/password login or configure Firebase environment variables.");
+      setLoading(false);
+      return;
+    }
+    
     try {
       const provider = new GoogleAuthProvider();
       provider.setCustomParameters({ prompt: "select_account" });
       const result = await signInWithPopup(auth, provider);
-      const idToken = await result.user.getIdToken();
+      const user = result.user;
+      // IMPORTANT: Force refresh to always get a fresh token immediately after Google auth
+      const idToken = await user.getIdToken(true);
       
-      // Send Firebase token to backend for verification
+      // Send FRESH Firebase token directly to backend - do NOT cache in localStorage
       const response = await firebaseAuth(idToken);
       setAuthLogin(response.user, response.token);
       navigate("/");
@@ -62,6 +78,11 @@ export default function Login() {
       if (err.code === "auth/popup-closed-by-user") {
         // User cancelled, don't show error
         return;
+      } else if (err.code === "auth/popup-blocked") {
+        setError("Popup was blocked. Please allow popups for this site or use email/password login.");
+      } else if (err.message && err.message.includes("Session expired")) {
+        // Backend returned 401 for expired Firebase session
+        setError("Your Google session expired. Please sign in again.");
       } else {
         setError(err.message || "Google authentication failed");
       }
@@ -245,6 +266,21 @@ export default function Login() {
               </button>
             </div>
           </>
+        )}
+
+        {!firebaseReady && (
+          <div style={{ 
+            backgroundColor: 'rgba(107, 114, 128, 0.2)', 
+            border: '1px solid rgba(107, 114, 128, 0.5)', 
+            color: '#d1d5db', 
+            padding: '12px', 
+            borderRadius: '6px', 
+            marginBottom: '16px', 
+            fontSize: '12px',
+            textAlign: 'center'
+          }}>
+            💡 <strong>Tip:</strong> Google Sign-in is not available. Please use email/password to login.
+          </div>
         )}
 
         <p style={{ 

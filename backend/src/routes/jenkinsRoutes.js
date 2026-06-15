@@ -6,6 +6,18 @@ const router = express.Router();
 
 router.use(verifyToken);
 
+router.post("/connect", jenkinsController.connectJenkinsHandler);
+router.get("/status", jenkinsController.getJenkinsStatusHandler);
+router.post("/disconnect", jenkinsController.disconnectJenkinsHandler);
+router.post("/test", jenkinsController.testJenkinsHandler);
+router.post("/pipeline/preview", jenkinsController.previewJenkinsPipelineHandler);
+router.post("/pipeline/generate", jenkinsController.generateJenkinsPipelineHandler);
+router.post("/jobs/create", jenkinsController.createJenkinsJobHandler);
+router.get("/jobs", jenkinsController.listJenkinsJobsHandler);
+router.get("/jobs/:id", jenkinsController.getJenkinsJobHandler);
+router.delete("/jobs/:id", jenkinsController.deleteJenkinsJobHandler);
+router.post("/jobs/:id/recreate", jenkinsController.recreateJenkinsJobHandler);
+
 /**
  * Jenkins Pipeline Endpoints
  * 

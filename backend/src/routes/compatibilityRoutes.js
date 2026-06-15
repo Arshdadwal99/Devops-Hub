@@ -9,6 +9,25 @@ import { verifyToken } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
+// Root compatibility API endpoint
+router.get("/", verifyToken, (req, res) => {
+  res.json({
+    message: "Compatibility API endpoint",
+    availableEndpoints: [
+      "GET /api/deployments",
+      "POST /api/deploy",
+      "POST /api/rollback",
+      "POST /api/restart",
+      "GET /api/containers",
+      "GET /api/logs",
+      "GET /api/metrics",
+      "POST /api/analyze-logs",
+      "GET /api/pipeline",
+      "GET /api/pipeline/status"
+    ]
+  });
+});
+
 function forwardTo(targetRouter, targetPath) {
   return (req, res, next) => {
     const originalUrl = req.url;

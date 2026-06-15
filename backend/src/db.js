@@ -71,7 +71,7 @@ export async function connectDb() {
     reconnectAttempts = 0;
     
     console.log("✅ [DB] MongoDB connected successfully!");
-    console.log(`✅ [DB] Database: ${mongoose.connection.db.getName()}`);
+    console.log(`✅ [DB] Database: ${mongoose.connection.name}`);
     console.log(`✅ [DB] Connection state: ${mongoose.connection.readyState}`);
     
     return true;

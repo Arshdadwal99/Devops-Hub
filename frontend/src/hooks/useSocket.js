@@ -286,6 +286,14 @@ export const useSocket = (token) => {
     []
   );
 
+  const on = useCallback((eventName, callback) => {
+    socketRef.current?.on(eventName, callback);
+  }, []);
+
+  const off = useCallback((eventName, callback) => {
+    socketRef.current?.off(eventName, callback);
+  }, []);
+
   // Request build progress on demand
   const requestBuildProgress = useCallback((buildNumber) => {
     emit("jenkins:request-build-progress", buildNumber);
@@ -303,6 +311,8 @@ export const useSocket = (token) => {
     subscribe,
     unsubscribe,
     emit,
+    on,
+    off,
     requestBuildProgress,
     requestContainerStats,
   };

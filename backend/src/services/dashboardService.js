@@ -5,6 +5,8 @@ import { Alert } from "../models/Alert.js";
 import { Deployment } from "../models/Deployment.js";
 import { Log } from "../models/Logs.js";
 import { Traffic } from "../models/Traffic.js";
+import { Pipeline } from "../models/Pipeline.js";
+import { AutoDeploy } from "../models/AutoDeploy.js";
 
 /**
  * Build complete dashboard with real data from all sources
@@ -14,7 +16,7 @@ export async function fetchDashboard(userId = "system") {
     console.log("📊 [Dashboard] Fetching complete dashboard...");
 
     // Fetch all data in parallel
-    const [metrics, metricsHistory, pipelineStatus, buildInfo, containers, recentDeployments, recentAlerts, recentLogs] = await Promise.all([
+    const [metrics, metricsHistory, pipelineStatus, buildInfo, containers, recentDeployments, recentAlerts, recentLogs, generatedPipeline, autoDeployConfig] = await Promise.all([
       getSystemMetrics(userId),
       getMetricsHistory(userId, 24 * 60 * 60 * 1000).catch(() => ({ history: [] })),
       getPipelineStatus(userId).catch(() => null),
@@ -23,6 +25,8 @@ export async function fetchDashboard(userId = "system") {
       Deployment.findOne({ userId }).sort({ createdAt: -1 }).lean().catch(() => null),
       Alert.find({ userId, resolved: false }).sort({ createdAt: -1 }).limit(5).lean().catch(() => []),
       Log.find({ userId }).sort({ createdAt: -1 }).limit(10).lean().catch(() => []),
+      Pipeline.findOne({ userId, provider: { $in: ["github-actions", "jenkins"] } }).sort({ createdAt: -1 }).lean().catch(() => null),
+      AutoDeploy.findOne({ userId }).sort({ updatedAt: -1 }).lean().catch(() => null),
     ]);
 
     // Get traffic stats
@@ -38,10 +42,29 @@ export async function fetchDashboard(userId = "system") {
     // Pipeline data from Jenkins
     const pipeline = {
       workflow: pipelineStatus?.jobName || "DevOps Hub Pipeline",
-      buildStatus: String(pipelineStatus?.status || buildInfo?.status || "unknown").toLowerCase(),
+      buildStatus: String(
+        generatedPipeline?.statusTracking?.workflowStatus ||
+        pipelineStatus?.status ||
+        buildInfo?.status ||
+        "unknown"
+      ).toLowerCase(),
       deploymentStatus: recentDeployments?.status || "unknown",
       environment: "production",
-      progress: pipelineStatus?.progress || 0,
+      progress: generatedPipeline?.statusTracking?.workflowStatus === "committed" ? 100 : pipelineStatus?.progress || 0,
+      generatedWorkflow: generatedPipeline
+        ? {
+            path: generatedPipeline.generatedWorkflow?.path,
+            repository: generatedPipeline.repository,
+            projectType: generatedPipeline.projectType,
+            statusTracking: generatedPipeline.statusTracking,
+          }
+        : null,
+      stages: generatedPipeline?.stages || [
+        { name: "Generate CI/CD Pipeline", status: "pending" },
+        { name: "Generate Jenkins Pipeline", status: "pending" },
+        { name: "Create Jenkins Job", status: "pending" },
+        { name: "Configure GitHub Webhook", status: "pending" },
+      ],
       lastCommit: {
         message: buildInfo?.commit ? `Commit ${buildInfo.commit}` : "No commits found",
         hash: buildInfo?.buildNumber ? `#${buildInfo.buildNumber}` : "N/A",
@@ -96,9 +119,13 @@ export async function fetchDashboard(userId = "system") {
       deployment: {
         lastDeployment: recentDeployments,
         status: recentDeployments?.status || "unknown",
+        autoDeployEnabled: Boolean(autoDeployConfig?.enabled),
+        autoDeployStatus: autoDeployConfig?.status || recentDeployments?.autoDeployStatus || "DISABLED",
+        autoDeploy: autoDeployConfig,
         version: recentDeployments?.version || "N/A",
         previousVersion: recentDeployments?.previousVersion || "N/A",
         deploymentHistory: [],
+        logs: recentDeployments?.logs || [],
       },
       controlPanel: {
         currentVersion: recentDeployments?.version || "1.0.0",
@@ -108,10 +135,13 @@ export async function fetchDashboard(userId = "system") {
         nextRecommendation: "Monitor memory usage - currently at " + (metrics.memory || 85) + "%",
       },
       logs: {
-        deployment: recentLogs
+        deployment: [
+          ...(recentDeployments?.logs || []).slice(-5),
+          ...recentLogs
           .filter(log => log.source === "deployment" || log.logType === "deployment")
           .slice(0, 5)
           .map(log => `${new Date(log.createdAt).toLocaleTimeString()} - ${log.message}`),
+        ].slice(-8),
         errorLogs: recentLogs
           .filter(log => log.logType === "error" || log.severity === "error")
           .slice(0, 5)
