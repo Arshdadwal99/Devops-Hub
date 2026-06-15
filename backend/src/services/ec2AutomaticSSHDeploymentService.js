@@ -648,7 +648,7 @@ echo "[DevOpsHub][Deploy] Starting Docker Compose deployment via SSH"
 echo "[DevOpsHub][Deploy] Repository: https://github.com/Arshdadwal99/hotel-booking.git"
 
 run_cmd sudo mkdir -p /opt
-run_cmd sudo chown "$USER:$USER" /opt
+run_cmd sudo chown ubuntu:ubuntu /opt
 run_shell "git clone https://github.com/Arshdadwal99/hotel-booking.git /opt/hotel-booking || true"
 run_cmd cd /opt/hotel-booking
 run_cmd git fetch origin
